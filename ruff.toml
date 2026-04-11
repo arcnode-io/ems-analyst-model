@@ -1,0 +1,52 @@
+[lint]
+# Targeted rule selection to match TypeScript/Rust strictness
+select = [
+    # Core logic and imports
+    "F",     # Pyflakes - catches real bugs
+    "E",     # Pycodestyle errors - PEP 8 compliance
+    
+    # Bug prevention
+    "B",     # flake8-bugbear - common bug patterns
+    "S",     # flake8-bandit - security issues
+    
+    # Code quality
+    "C90",   # mccabe complexity
+    "N",     # pep8-naming - consistent naming
+    "UP",    # pyupgrade - modern Python patterns
+    "RUF",   # Ruff-specific rules
+    
+    # Best practices
+    "PERF",  # Performance improvements
+    "TRY",   # Exception handling best practices
+    "SIM",   # Code simplification
+    
+    # Selected documentation (not all D rules)
+    "D101", "D102", "D103",  # Require docstrings for public classes/methods/functions
+    
+    # Selected Pylint rules
+    "PLW",   # pylint warnings
+    "PLE",   # pylint errors
+
+    # Unused arguments
+    "ARG",   # flake8-unused-arguments - flags unused function arguments
+]
+
+ignore = [
+    # Security: Allow asserts in tests
+    "S101",
+    
+    # Exception handling: Too strict for practical use
+    "TRY003",  # Long exception messages
+    
+    # Magic values: Leave to coding review agent
+    "PLR2004",  # Magic value comparisons
+    # Error Messages
+    "E501", # Its fine if they are long
+    
+    # Type annotations: Prefer Optional over X | None
+    "UP045",  # Use X | None for type annotations
+]
+
+[lint.pylint]
+max-args = 5
+max-statements = 30

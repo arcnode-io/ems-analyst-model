@@ -1,0 +1,63 @@
+[project]
+name = "python-ml-pipeline"
+version = "1.0.0-beta"
+requires-python = "==3.13.2"
+dependencies = [
+    "matplotlib>=3.9.0",
+    "mlflow>=2.20.0",
+    "numpy>=2.0.0",
+    "pandera[polars]>=0.22.0",
+    "pandas>=2.2.0",
+    "polars>=1.31.0",
+    "prometheus-client>=0.22.0",
+    "prophet>=1.1.7",
+    "psycopg2-binary>=2.9.10",
+    "pyarrow>=20.0.0",
+    "pydantic>=2.9.2",
+    "pyyaml>=6.0.2",
+    "requests>=2.32.4",
+    "schedule>=1.2.0",
+    "scikit-learn>=1.5.0",
+    "seaborn>=0.13.0",
+    "xgboost>=2.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "bandit>=1.8.0",
+    "black[d]>=26.3.1",
+    "mypy>=1.14.0",
+    "poethepoet>=0.32.0",
+    "pook>=2.1.0",
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.4",
+    "ruff>=0.8.4",
+    "pip-audit>=2.6.1",
+    "pytest-cov>=6.0.0",
+    "deptry>=0.23.0",
+    "pip>=25.1.1",
+    "testcontainers[postgres]>=4.12.0",
+]
+
+[tool.poe.tasks]
+depcheck = "deptry ."
+format = "black ."
+lint = "ruff check"
+typecheck = "mypy  --install-types --non-interactive  --explicit-package-bases ."
+audit-src = "bandit -r src/* -s B101"
+audit-packages = "pip-audit --ignore-vuln GHSA-4xh5-x5gv-qwph --ignore-vuln GHSA-wf7f-8fxf-xfxc"
+security = ["audit-src", "audit-packages"]
+checks = ["depcheck", "format", "lint", "typecheck", "security"]
+healthcheck = "bash -c 'curl -sf -o /dev/null -w \"CoinGecko: %{http_code}\\n\" https://api.coingecko.com/api/v3/ping && echo APIS_READY'"
+unit = "pytest -vv src/*"
+integration = "pytest -vv -p no:warnings tests/*"
+cover = "pytest -vv --cov=src -p no:warnings src/*"
+test = ["unit", "healthcheck", "integration"]
+review = "claude 'run code-reviewer agent against diff for quality and elegance'"
+commit = "bash -c 'uv run poe checks && uv run poe test && uv run poe review && git add -A && git cz && git push'"
+
+[tool.coverage.run]
+omit = ["*/test_*.py", "tests/*"]
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["numpy", "pandas", "pyarrow", "scikit-learn"]

@@ -1,0 +1,28 @@
+local:
+  log_level: DEBUG
+  db_host: localhost
+  db_name: postgres
+  db_user: postgres
+  db_port: 5432
+  api_url: https://api.coingecko.com/api/v3/coins/bitcoin/market_chart
+  prometheus_pushgateway: http://localhost:9091
+  mlflow_tracking_uri: http://localhost:5000
+  mlflow_model_name: timeseries_predictor
+  schedule_time: "02:00"
+  prophet_daily_seasonality: true
+  prophet_weekly_seasonality: true
+  prophet_yearly_seasonality: true
+beta:
+  log_level: INFO
+  db_host: 173.211.12.43
+  db_name: postgres
+  db_user: postgres
+  db_port: 5432
+  api_url: https://api.coingecko.com/api/v3/coins/bitcoin/market_chart
+  prometheus_pushgateway: http://173.211.12.43:9091
+  mlflow_tracking_uri: http://173.211.12.43:5000
+  mlflow_model_name: timeseries_predictor
+  schedule_time: "02:00"
+  prophet_daily_seasonality: true
+  prophet_weekly_seasonality: true
+  prophet_yearly_seasonality: true
