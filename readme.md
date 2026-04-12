@@ -1,5 +1,8 @@
 
 # EMS Analyst Model 📈🧠
+
+![](https://img.shields.io/gitlab/pipeline-status/arcnode-io/ems-analyst-model?branch=main&logo=gitlab)
+![](https://gitlab.com/arcnode-io/ems-analyst-model/badges/main/coverage.svg)
 ![](https://img.shields.io/badge/timescale-gray?logo=timescale)
 ![](https://img.shields.io/badge/mlflow-gray?logo=mlflow)
 ![](https://img.shields.io/badge/validator-pandera-78ac1b)
