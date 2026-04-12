@@ -495,6 +495,85 @@ wheels = [
 ]
 
 [[package]]
+name = "ems-analyst-model"
+version = "1.0.0b0"
+source = { virtual = "." }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "mlflow" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pandera", extra = ["polars"] },
+    { name = "polars" },
+    { name = "prometheus-client" },
+    { name = "prophet" },
+    { name = "psycopg2-binary" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "schedule" },
+    { name = "scikit-learn" },
+    { name = "seaborn" },
+    { name = "xgboost" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "bandit" },
+    { name = "black", extra = ["d"] },
+    { name = "deptry" },
+    { name = "mypy" },
+    { name = "pip" },
+    { name = "pip-audit" },
+    { name = "poethepoet" },
+    { name = "pook" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "testcontainers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "matplotlib", specifier = ">=3.9.0" },
+    { name = "mlflow", specifier = ">=2.20.0" },
+    { name = "numpy", specifier = ">=2.0.0" },
+    { name = "pandas", specifier = ">=2.2.0" },
+    { name = "pandera", extras = ["polars"], specifier = ">=0.22.0" },
+    { name = "polars", specifier = ">=1.31.0" },
+    { name = "prometheus-client", specifier = ">=0.22.0" },
+    { name = "prophet", specifier = ">=1.1.7" },
+    { name = "psycopg2-binary", specifier = ">=2.9.10" },
+    { name = "pyarrow", specifier = ">=20.0.0" },
+    { name = "pydantic", specifier = ">=2.9.2" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "requests", specifier = ">=2.32.4" },
+    { name = "schedule", specifier = ">=1.2.0" },
+    { name = "scikit-learn", specifier = ">=1.5.0" },
+    { name = "seaborn", specifier = ">=0.13.0" },
+    { name = "xgboost", specifier = ">=2.1.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bandit", specifier = ">=1.8.0" },
+    { name = "black", extras = ["d"], specifier = ">=26.3.1" },
+    { name = "deptry", specifier = ">=0.23.0" },
+    { name = "mypy", specifier = ">=1.14.0" },
+    { name = "pip", specifier = ">=25.1.1" },
+    { name = "pip-audit", specifier = ">=2.6.1" },
+    { name = "poethepoet", specifier = ">=0.32.0" },
+    { name = "pook", specifier = ">=2.1.0" },
+    { name = "pytest", specifier = ">=8.3.4" },
+    { name = "pytest-asyncio", specifier = ">=0.25.4" },
+    { name = "pytest-cov", specifier = ">=6.0.0" },
+    { name = "ruff", specifier = ">=0.8.4" },
+    { name = "testcontainers", extras = ["postgres"], specifier = ">=4.12.0" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.135.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1831,85 +1910,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/82/ed/0301aeeac3e5353ef3d94b6ec08bbcabd04a72018415dcb29e588514bba8/python_dotenv-1.2.2.tar.gz", hash = "sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3", size = 50135, upload-time = "2026-03-01T16:00:26.196Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a", size = 22101, upload-time = "2026-03-01T16:00:25.09Z" },
-]
-
-[[package]]
-name = "python-ml-pipeline"
-version = "1.0.0b0"
-source = { virtual = "." }
-dependencies = [
-    { name = "matplotlib" },
-    { name = "mlflow" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "pandera", extra = ["polars"] },
-    { name = "polars" },
-    { name = "prometheus-client" },
-    { name = "prophet" },
-    { name = "psycopg2-binary" },
-    { name = "pyarrow" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "requests" },
-    { name = "schedule" },
-    { name = "scikit-learn" },
-    { name = "seaborn" },
-    { name = "xgboost" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "bandit" },
-    { name = "black", extra = ["d"] },
-    { name = "deptry" },
-    { name = "mypy" },
-    { name = "pip" },
-    { name = "pip-audit" },
-    { name = "poethepoet" },
-    { name = "pook" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-    { name = "testcontainers" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "matplotlib", specifier = ">=3.9.0" },
-    { name = "mlflow", specifier = ">=2.20.0" },
-    { name = "numpy", specifier = ">=2.0.0" },
-    { name = "pandas", specifier = ">=2.2.0" },
-    { name = "pandera", extras = ["polars"], specifier = ">=0.22.0" },
-    { name = "polars", specifier = ">=1.31.0" },
-    { name = "prometheus-client", specifier = ">=0.22.0" },
-    { name = "prophet", specifier = ">=1.1.7" },
-    { name = "psycopg2-binary", specifier = ">=2.9.10" },
-    { name = "pyarrow", specifier = ">=20.0.0" },
-    { name = "pydantic", specifier = ">=2.9.2" },
-    { name = "pyyaml", specifier = ">=6.0.2" },
-    { name = "requests", specifier = ">=2.32.4" },
-    { name = "schedule", specifier = ">=1.2.0" },
-    { name = "scikit-learn", specifier = ">=1.5.0" },
-    { name = "seaborn", specifier = ">=0.13.0" },
-    { name = "xgboost", specifier = ">=2.1.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "bandit", specifier = ">=1.8.0" },
-    { name = "black", extras = ["d"], specifier = ">=26.3.1" },
-    { name = "deptry", specifier = ">=0.23.0" },
-    { name = "mypy", specifier = ">=1.14.0" },
-    { name = "pip", specifier = ">=25.1.1" },
-    { name = "pip-audit", specifier = ">=2.6.1" },
-    { name = "poethepoet", specifier = ">=0.32.0" },
-    { name = "pook", specifier = ">=2.1.0" },
-    { name = "pytest", specifier = ">=8.3.4" },
-    { name = "pytest-asyncio", specifier = ">=0.25.4" },
-    { name = "pytest-cov", specifier = ">=6.0.0" },
-    { name = "ruff", specifier = ">=0.8.4" },
-    { name = "testcontainers", extras = ["postgres"], specifier = ">=4.12.0" },
 ]
 
 [[package]]
