@@ -1,1 +1,1 @@
-"""Test package for python-ml-pipeline template."""
+"""Test package for ems-analyst-model."""

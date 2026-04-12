@@ -1,3 +1,5 @@
+# Reference: CoinGecko API below is from the ml-pipeline template.
+# Replace with ERCOT solar supply API when implementing domain code.
 local:
   log_level: DEBUG
   db_host: localhost
