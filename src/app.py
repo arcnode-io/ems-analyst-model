@@ -6,6 +6,8 @@ import time
 import mlflow
 import pandas as pd
 import schedule
+from mlflow.tracking.client import MlflowClient
+from mlflow.tracking.fluent import log_metric, log_param, start_run
 
 from src.config import Config
 from src.models import SCHEDULE_POLL_INTERVAL_SECONDS, PredictiveModels
@@ -26,18 +28,18 @@ def publish_to_mlflow(config: Config, result: TrainingResult) -> str:
     """
     mlflow.set_tracking_uri(config.mlflow_tracking_uri)
 
-    with mlflow.start_run():
+    with start_run():
         # Log metrics
         champion_mae = get_model_mae(
             result.champion, result.prophet_mae, result.xgboost_mae
         )
-        mlflow.log_metric("champion_mae", champion_mae)
-        mlflow.log_metric("prophet_mae", result.prophet_mae)
-        mlflow.log_metric("xgboost_mae", result.xgboost_mae)
-        mlflow.log_metric("baseline_mae", result.baseline_mae)
+        log_metric("champion_mae", champion_mae)
+        log_metric("prophet_mae", result.prophet_mae)
+        log_metric("xgboost_mae", result.xgboost_mae)
+        log_metric("baseline_mae", result.baseline_mae)
 
         # Log parameters
-        mlflow.log_param("champion_model", result.champion.value)
+        log_param("champion_model", result.champion.value)
 
         # Log champion model with input_example for signature inference
         if result.champion == PredictiveModels.PROPHET:
@@ -60,7 +62,7 @@ def publish_to_mlflow(config: Config, result: TrainingResult) -> str:
             )
 
         # Get version
-        client = mlflow.MlflowClient()
+        client = MlflowClient()
         model_versions = client.search_model_versions(
             f"name='{config.mlflow_model_name}'"
         )

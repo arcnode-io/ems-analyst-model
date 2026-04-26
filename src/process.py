@@ -4,6 +4,7 @@ import os
 from datetime import UTC, datetime
 from typing import TypedDict
 
+import pandera.polars as pa
 import polars as pl
 import psycopg2
 import requests
@@ -34,6 +35,7 @@ def extract(config: Config) -> list[list[int | float]]:
     return data["prices"]
 
 
+@pa.check_types
 def transform(prices: list[list[int | float]]) -> TimeseriesData:
     """Transform API prices to timeseries DataFrame.
 
@@ -55,6 +57,7 @@ def transform(prices: list[list[int | float]]) -> TimeseriesData:
     return TimeseriesData(df)
 
 
+@pa.check_types
 def load(df: TimeseriesData, config: Config) -> None:
     """Load data into TimescaleDB with upsert.
 

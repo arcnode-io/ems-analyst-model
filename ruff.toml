@@ -29,6 +29,11 @@ select = [
 
     # Unused arguments
     "ARG",   # flake8-unused-arguments - flags unused function arguments
+
+    # Type annotations - replaces mypy strictness recovered from ty migration:
+    # ANN001/002/003/201/204/205/206 = disallow_untyped_defs + disallow_incomplete_defs
+    # ANN401                          = disallow_any_explicit
+    "ANN",
 ]
 
 ignore = [

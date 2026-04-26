@@ -3,6 +3,7 @@
 
 ![](https://img.shields.io/gitlab/pipeline-status/arcnode-io/ems-analyst-model?branch=main&logo=gitlab)
 ![](https://gitlab.com/arcnode-io/ems-analyst-model/badges/main/coverage.svg)
+![](https://img.shields.io/badge/ty_checked-gray?logo=astral)
 ![](https://img.shields.io/badge/timescale-gray?logo=timescale)
 ![](https://img.shields.io/badge/mlflow-gray?logo=mlflow)
 ![](https://img.shields.io/badge/validator-pandera-78ac1b)
@@ -44,9 +45,9 @@ cloud ercot_api
 rectangle train
 database timeseries
 rectangle model_store
-ercot_api - train: solar production data
-train - timeseries: hourly data since 2016
-train -d- model_store: deploy MLflow model
+train -l-> ercot_api: HTTP\n updates with latest
+train -u-> timeseries: SQL\n gets historical
+train -d-> model_store: MLflow API\ndeploy model
 ```
 
 ## Sequence Diagram
@@ -65,7 +66,7 @@ database model_store
 == Daily Automated Training ==
 process -> ercot_api: request solar data
 process -> timeseries: load hourly data
-timeseries <- train: get training data
+train -> timeseries: get training data
 train -> train: compare Prophet vs LSTM vs XGBoost
 train -> train: promote best model
 train -> model_store: deploy MLflow model

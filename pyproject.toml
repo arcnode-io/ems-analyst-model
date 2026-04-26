@@ -3,6 +3,7 @@ name = "ems-analyst-model"
 version = "1.0.0-beta"
 requires-python = "==3.13.2"
 dependencies = [
+    "beartype>=0.19",
     "matplotlib>=3.9.0",
     "mlflow>=2.20.0",
     "numpy>=2.0.0",
@@ -26,24 +27,27 @@ dependencies = [
 dev = [
     "bandit>=1.8.0",
     "black[d]>=26.3.1",
-    "mypy>=1.14.0",
+    "deptry>=0.23.0",
+    "pandas-stubs>=3.0",
+    "pip>=25.1.1",
+    "pip-audit>=2.6.1",
     "poethepoet>=0.32.0",
     "pook>=2.1.0",
     "pytest>=8.3.4",
     "pytest-asyncio>=0.25.4",
-    "ruff>=0.8.4",
-    "pip-audit>=2.6.1",
     "pytest-cov>=6.0.0",
-    "deptry>=0.23.0",
-    "pip>=25.1.1",
+    "ruff>=0.8.4",
     "testcontainers[postgres]>=4.12.0",
+    "ty>=0.0.18",
+    "types-pyyaml>=6.0",
+    "types-requests>=2.32",
 ]
 
 [tool.poe.tasks]
 depcheck = "deptry ."
 format = "black ."
 lint = "ruff check"
-typecheck = "mypy  --install-types --non-interactive  --explicit-package-bases ."
+typecheck = "ty check"
 audit-src = "bandit -r src/* -s B101"
 audit-packages = "pip-audit --ignore-vuln GHSA-4xh5-x5gv-qwph --ignore-vuln GHSA-wf7f-8fxf-xfxc"
 security = ["audit-src", "audit-packages"]
