@@ -4,6 +4,8 @@ version = "1.0.0-beta"
 requires-python = "==3.13.2"
 dependencies = [
     "beartype>=0.19",
+    "gitpython>=3.1.50",
+    "mako>=1.3.12",
     "matplotlib>=3.9.0",
     "mlflow>=2.20.0",
     "numpy>=2.0.0",
@@ -20,6 +22,7 @@ dependencies = [
     "schedule>=1.2.0",
     "scikit-learn>=1.5.0",
     "seaborn>=0.13.0",
+    "urllib3>=2.7.0",
     "xgboost>=2.1.0",
 ]
 
@@ -29,7 +32,7 @@ dev = [
     "black[d]>=26.3.1",
     "deptry>=0.23.0",
     "pandas-stubs>=3.0",
-    "pip>=25.1.1",
+    "pip>=26.1",
     "pip-audit>=2.6.1",
     "poethepoet>=0.32.0",
     "pook>=2.1.0",
@@ -49,7 +52,7 @@ format = "black ."
 lint = "ruff check"
 typecheck = "ty check"
 audit-src = "bandit -r src/* -s B101"
-audit-packages = "pip-audit --ignore-vuln GHSA-4xh5-x5gv-qwph --ignore-vuln GHSA-wf7f-8fxf-xfxc --ignore-vuln CVE-2026-3219"
+audit-packages = "pip-audit"
 security = ["audit-src", "audit-packages"]
 checks = ["depcheck", "format", "lint", "typecheck", "security"]
 healthcheck = "bash -c 'curl -sf -o /dev/null -w \"CoinGecko: %{http_code}\\n\" https://api.coingecko.com/api/v3/ping && echo APIS_READY'"
@@ -64,4 +67,4 @@ commit = "bash -c 'uv run poe checks && uv run poe test && uv run poe review && 
 omit = ["*/test_*.py", "tests/*"]
 
 [tool.deptry.per_rule_ignores]
-DEP002 = ["numpy", "pandas", "pyarrow", "scikit-learn"]
+DEP002 = ["gitpython", "mako", "numpy", "pyarrow", "urllib3"]
