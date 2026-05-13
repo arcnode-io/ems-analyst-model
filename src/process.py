@@ -56,20 +56,14 @@ def transform(prices: list[list[int | float]]) -> TimeseriesData:
 
 
 @pa.check_types
-def load(df: TimeseriesData, config: Config) -> None:
+def load(df: TimeseriesData, _config: Config) -> None:
     """Load data into TimescaleDB with upsert.
 
     Args:
         df: Timeseries data to insert
         config: Configuration object
     """
-    with psycopg2.connect(
-        host=config.db_host,
-        database=config.db_name,
-        user=config.db_user,
-        password=os.environ["POSTGRES_PASSWORD"],
-        port=config.db_port,
-    ) as conn:
+    with psycopg2.connect(os.environ["TIMESERIES_URL"]) as conn:
         with conn.cursor() as cursor:
             # Insert with ON CONFLICT DO UPDATE
             for row in df.iter_rows(named=True):

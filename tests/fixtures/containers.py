@@ -57,30 +57,31 @@ def _start_container(
 
 @contextmanager
 def start_postgres(
-    password: str,
     image: str = "postgres:15",
     username: str = "postgres",
+    password: str | None = None,
     dbname: str = "postgres",
 ) -> Generator[Container]:
     """Start a Postgres container with dynamic port.
 
     Args:
-        password: DB password
         image: Docker image (postgres:15, timescale/timescaledb:latest-pg15)
         username: Database username
+        password: DB password
         dbname: Database name
 
     Yields:
         Container with postgresql:// URL and dynamic port
     """
+    resolved_password = password if password is not None else "test"
     with PostgresContainer(
-        image, username=username, password=password, dbname=dbname
+        image, username=username, password=resolved_password, dbname=dbname
     ) as c:
         port = int(c.get_exposed_port(5432))
         yield Container(
             host="localhost",
             port=port,
-            url=f"postgres://{username}:{password}@localhost:{port}/{dbname}",
+            url=f"postgres://{username}:{resolved_password}@localhost:{port}/{dbname}",
         )
 
 

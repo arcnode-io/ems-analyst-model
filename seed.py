@@ -38,27 +38,16 @@ def download_sql_dump(url: str) -> str:
     return temp_path
 
 
-def execute_sql_dump(
-    sql_path: str, host: str, database: str, user: str, password: str
-) -> None:
+def execute_sql_dump(sql_path: str, timeseries_url: str) -> None:
     """Execute SQL dump against PostgreSQL database.
 
     Args:
         sql_path: Path to SQL dump file
-        host: Database host
-        database: Database name
-        user: Database user
-        password: Database password
+        timeseries_url: PostgreSQL connection string
 
     """
-    print(f"=�  Connecting to database at {host}:5432...")
-    conn = psycopg2.connect(
-        host=host,
-        database=database,
-        user=user,
-        password=password,
-        port=5432,
-    )
+    print("=�  Connecting to timeseries database...")
+    conn = psycopg2.connect(timeseries_url)
     cursor = conn.cursor()
 
     print(f"� Executing SQL dump from {sql_path}...")
@@ -75,25 +64,18 @@ def execute_sql_dump(
 def seed() -> None:
     """Download and load historical timeseries data into PostgreSQL."""
     # Load configuration
-    config = load_config()
+    load_config()
 
-    # Get password from environment
-    password = os.environ.get("POSTGRES_PASSWORD", "")
-    if not password:
-        raise ValueError("POSTGRES_PASSWORD environment variable is required")
+    timeseries_url = os.environ.get("TIMESERIES_URL", "")
+    if not timeseries_url:
+        raise ValueError("TIMESERIES_URL environment variable is required")
 
     # Download SQL dump
     sql_path = download_sql_dump(SQL_DUMP_URL)
 
     try:
         # Execute SQL dump
-        execute_sql_dump(
-            sql_path=sql_path,
-            host=config.db_host,
-            database=config.db_name,
-            user=config.db_user,
-            password=password,
-        )
+        execute_sql_dump(sql_path=sql_path, timeseries_url=timeseries_url)
     finally:
         # Cleanup temporary file
         if os.path.exists(sql_path):

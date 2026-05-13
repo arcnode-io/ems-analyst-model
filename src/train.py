@@ -36,7 +36,7 @@ class TrainingResult(BaseModel):
     xgboost_model: XGBRegressor
 
 
-def load_timeseries_data(config: Config) -> pl.DataFrame:
+def load_timeseries_data(_config: Config) -> pl.DataFrame:
     """Load timeseries data from TimescaleDB.
 
     Args:
@@ -45,13 +45,7 @@ def load_timeseries_data(config: Config) -> pl.DataFrame:
     Returns:
         Timeseries DataFrame
     """
-    with psycopg2.connect(
-        host=config.db_host,
-        database=config.db_name,
-        user=config.db_user,
-        password=os.environ["POSTGRES_PASSWORD"],
-        port=config.db_port,
-    ) as conn:
+    with psycopg2.connect(os.environ["TIMESERIES_URL"]) as conn:
         query = "SELECT ts, value FROM timeseries_data ORDER BY ts"
         df = pl.read_database(query, connection=conn)
     return df

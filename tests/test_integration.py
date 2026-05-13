@@ -15,30 +15,21 @@ import requests
 from prometheus_client.parser import text_string_to_metric_families
 
 from src.app import app
-from src.config import Config, load_config
+from src.config import load_config
 from src.models import PredictiveModels
 from tests.fixtures.containers import start_mlflow, start_postgres, start_pushgateway
 
 
-def create_timeseries_table(
-    config: Config, password: str
-) -> psycopg2.extensions.connection:
+def create_timeseries_table(timeseries_url: str) -> psycopg2.extensions.connection:
     """Create timeseries_data table and return connection.
 
     Args:
-        config: Configuration with DB connection details
-        password: Database password
+        timeseries_url: PostgreSQL connection string
 
     Returns:
         Database connection (caller must close)
     """
-    conn = psycopg2.connect(
-        host=config.db_host,
-        database=config.db_name,
-        user=config.db_user,
-        password=password,
-        port=config.db_port,
-    )
+    conn = psycopg2.connect(timeseries_url)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE timeseries_data (
@@ -141,17 +132,12 @@ class TestIntegration:
         Integration test: Insert test data directly, run app(), verify MLflow inference.
         """
         # Arrange
-        password = os.environ["POSTGRES_PASSWORD"]
-
         with (
             start_mlflow() as mlflow_c,
-            start_postgres(
-                password=password, image="timescale/timescaledb:latest-pg15"
-            ) as pg,
+            start_postgres(image="timescale/timescaledb:latest-pg15") as pg,
         ):
             test_config = load_config().model_copy(
                 update={
-                    "db_port": pg.port,
                     "mlflow_tracking_uri": mlflow_c.url,
                     "mlflow_model_name": "test_timeseries_predictor",
                     "prophet_daily_seasonality": False,
@@ -160,7 +146,8 @@ class TestIntegration:
             )
 
             # Seed database with trending data
-            conn = create_timeseries_table(test_config, password)
+            os.environ["TIMESERIES_URL"] = pg.url
+            conn = create_timeseries_table(pg.url)
             try:
                 seed_trending_data(conn)
             finally:
@@ -222,18 +209,13 @@ class TestIntegration:
         verify push_model_metrics sends metrics to Pushgateway.
         """
         # Arrange
-        password = os.environ["POSTGRES_PASSWORD"]
-
         with (
             start_mlflow() as mlflow_c,
-            start_postgres(
-                password=password, image="timescale/timescaledb:latest-pg15"
-            ) as pg,
+            start_postgres(image="timescale/timescaledb:latest-pg15") as pg,
             start_pushgateway() as pushgateway,
         ):
             test_config = load_config().model_copy(
                 update={
-                    "db_port": pg.port,
                     "mlflow_tracking_uri": mlflow_c.url,
                     "mlflow_model_name": "test_degradation_predictor",
                     "prophet_daily_seasonality": False,
@@ -243,7 +225,8 @@ class TestIntegration:
             )
 
             # Seed database with random data (triggers degradation)
-            conn = create_timeseries_table(test_config, password)
+            os.environ["TIMESERIES_URL"] = pg.url
+            conn = create_timeseries_table(pg.url)
             try:
                 seed_random_data(conn)
             finally:

@@ -18,10 +18,6 @@ class LogLevel(enum.StrEnum):
 
 class Config(BaseModel):  # noqa: D101
     log_level: LogLevel
-    db_host: str
-    db_name: str
-    db_user: str
-    db_port: int
     api_url: str
     prometheus_pushgateway: str
     mlflow_tracking_uri: str
