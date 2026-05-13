@@ -47,9 +47,7 @@ def transform(prices: list[list[int | float]]) -> TimeseriesData:
     """
     df = pl.DataFrame(
         {
-            "timestamp": [
-                datetime.fromtimestamp(ts / 1000, tz=UTC) for ts, _ in prices
-            ],
+            "ts": [datetime.fromtimestamp(ts / 1000, tz=UTC) for ts, _ in prices],
             "value": [price for _, price in prices],
         }
     )
@@ -77,11 +75,11 @@ def load(df: TimeseriesData, config: Config) -> None:
             for row in df.iter_rows(named=True):
                 cursor.execute(
                     """
-                    INSERT INTO timeseries_data (timestamp, value)
+                    INSERT INTO timeseries_data (ts, value)
                     VALUES (%s, %s)
-                    ON CONFLICT (timestamp) DO UPDATE SET value = EXCLUDED.value
+                    ON CONFLICT (ts) DO UPDATE SET value = EXCLUDED.value
                     """,
-                    (row["timestamp"], row["value"]),
+                    (row["ts"], row["value"]),
                 )
         conn.commit()
 

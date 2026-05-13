@@ -18,7 +18,7 @@ class PredictiveModels(enum.StrEnum):
 class TimeseriesDataSchema(pa.DataFrameModel):
     """Raw timeseries data schema from database."""
 
-    timestamp: datetime = pa.Field(nullable=False)
+    ts: datetime = pa.Field(nullable=False)
     value: float = pa.Field(nullable=False, ge=0)
 
     class Config:

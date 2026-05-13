@@ -52,7 +52,7 @@ def load_timeseries_data(config: Config) -> pl.DataFrame:
         password=os.environ["POSTGRES_PASSWORD"],
         port=config.db_port,
     ) as conn:
-        query = "SELECT timestamp, value FROM timeseries_data ORDER BY timestamp"
+        query = "SELECT ts, value FROM timeseries_data ORDER BY ts"
         df = pl.read_database(query, connection=conn)
     return df
 
@@ -69,11 +69,11 @@ def split_train_test(
     Returns:
         Tuple of (train_df, test_df)
     """
-    max_timestamp = df["timestamp"].max()
-    assert isinstance(max_timestamp, datetime)
-    split_date = max_timestamp - timedelta(days=test_days)  # type: ignore[operator]
-    train_df = df.filter(pl.col("timestamp") < split_date)
-    test_df = df.filter(pl.col("timestamp") >= split_date)
+    max_ts = df["ts"].max()
+    assert isinstance(max_ts, datetime)
+    split_date = max_ts - timedelta(days=test_days)  # type: ignore[operator]
+    train_df = df.filter(pl.col("ts") < split_date)
+    test_df = df.filter(pl.col("ts") >= split_date)
     return train_df, test_df
 
 
@@ -93,10 +93,8 @@ def train_prophet(
     import logging
 
     # Convert to pandas for Prophet (Prophet requires pandas)
-    prophet_train = train_df.to_pandas().rename(
-        columns={"timestamp": "ds", "value": "y"}
-    )
-    prophet_test = test_df.to_pandas().rename(columns={"timestamp": "ds", "value": "y"})
+    prophet_train = train_df.to_pandas().rename(columns={"ts": "ds", "value": "y"})
+    prophet_test = test_df.to_pandas().rename(columns={"ts": "ds", "value": "y"})
 
     # Remove timezone (Prophet doesn't support timezone-aware datetimes)
     prophet_train["ds"] = prophet_train["ds"].dt.tz_localize(None)
@@ -127,20 +125,20 @@ def create_xgboost_features(df: pl.DataFrame) -> pl.DataFrame:
     """Create time-based features for XGBoost.
 
     Args:
-        df: Input DataFrame with timestamp column
+        df: Input DataFrame with ts column
 
     Returns:
         DataFrame with time-based features
     """
     return df.with_columns(
         [
-            pl.col("timestamp").dt.hour().alias("hour"),
-            pl.col("timestamp").dt.day().alias("day"),
-            pl.col("timestamp").dt.month().alias("month"),
-            pl.col("timestamp").dt.year().alias("year"),
-            pl.col("timestamp").dt.weekday().alias("dayofweek"),
-            pl.col("timestamp").dt.ordinal_day().alias("dayofyear"),
-            pl.col("timestamp").dt.week().alias("weekofyear"),
+            pl.col("ts").dt.hour().alias("hour"),
+            pl.col("ts").dt.day().alias("day"),
+            pl.col("ts").dt.month().alias("month"),
+            pl.col("ts").dt.year().alias("year"),
+            pl.col("ts").dt.weekday().alias("dayofweek"),
+            pl.col("ts").dt.ordinal_day().alias("dayofyear"),
+            pl.col("ts").dt.week().alias("weekofyear"),
         ]
     )
 

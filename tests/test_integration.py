@@ -42,7 +42,7 @@ def create_timeseries_table(
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE timeseries_data (
-            timestamp TIMESTAMPTZ PRIMARY KEY,
+            ts TIMESTAMPTZ PRIMARY KEY,
             value DOUBLE PRECISION NOT NULL
         )
         """)
@@ -60,11 +60,11 @@ def seed_trending_data(conn: psycopg2.extensions.connection, days: int = 60) -> 
     cursor = conn.cursor()
     now = datetime.now(UTC)
     for i in range(days):
-        timestamp = now - timedelta(days=days - i)
+        ts = now - timedelta(days=days - i)
         value = 50000 + (i * 200)
         cursor.execute(
-            "INSERT INTO timeseries_data (timestamp, value) VALUES (%s, %s)",
-            (timestamp, value),
+            "INSERT INTO timeseries_data (ts, value) VALUES (%s, %s)",
+            (ts, value),
         )
     conn.commit()
     cursor.close()
@@ -86,10 +86,10 @@ def seed_random_data(conn: psycopg2.extensions.connection, days: int = 60) -> No
     random.seed(42)
     values = [random.uniform(45000, 55000) for _ in range(days)]  # noqa: S311
     for i in range(days):
-        timestamp = now - timedelta(days=days - i)
+        ts = now - timedelta(days=days - i)
         cursor.execute(
-            "INSERT INTO timeseries_data (timestamp, value) VALUES (%s, %s)",
-            (timestamp, values[i]),
+            "INSERT INTO timeseries_data (ts, value) VALUES (%s, %s)",
+            (ts, values[i]),
         )
     conn.commit()
     cursor.close()
