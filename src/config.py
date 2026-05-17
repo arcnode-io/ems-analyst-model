@@ -18,7 +18,10 @@ class LogLevel(enum.StrEnum):
 
 class Config(BaseModel):  # noqa: D101
     log_level: LogLevel
-    api_url: str
+    iso: str
+    settlement_point: str
+    gridstatus_dataset: str
+    backfill_start_date: str  # YYYY-MM-DD, used for first-run historical pull
     prometheus_pushgateway: str
     mlflow_tracking_uri: str
     mlflow_model_name: str

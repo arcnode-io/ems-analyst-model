@@ -1,21 +1,25 @@
-# Reference: CoinGecko API below is from the ml-pipeline template.
-# Replace with ERCOT solar supply API when implementing domain code.
 local:
   log_level: DEBUG
-  api_url: https://api.coingecko.com/api/v3/coins/bitcoin/market_chart
+  iso: ercot
+  settlement_point: HB_NORTH
+  gridstatus_dataset: ercot_spp_day_ahead_hourly
+  backfill_start_date: "2016-01-01"
   prometheus_pushgateway: http://localhost:9091
   mlflow_tracking_uri: http://localhost:5000
-  mlflow_model_name: timeseries_predictor
+  mlflow_model_name: dam-lmp-forecast-ercot-hb-north
   schedule_time: "02:00"
   prophet_daily_seasonality: true
   prophet_weekly_seasonality: true
   prophet_yearly_seasonality: true
 beta:
   log_level: INFO
-  api_url: https://api.coingecko.com/api/v3/coins/bitcoin/market_chart
+  iso: ercot
+  settlement_point: HB_NORTH
+  gridstatus_dataset: ercot_spp_day_ahead_hourly
+  backfill_start_date: "2016-01-01"
   prometheus_pushgateway: http://173.211.12.43:9091
   mlflow_tracking_uri: http://173.211.12.43:5000
-  mlflow_model_name: timeseries_predictor
+  mlflow_model_name: dam-lmp-forecast-ercot-hb-north
   schedule_time: "02:00"
   prophet_daily_seasonality: true
   prophet_weekly_seasonality: true

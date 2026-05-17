@@ -16,10 +16,15 @@ class PredictiveModels(enum.StrEnum):
 
 
 class TimeseriesDataSchema(pa.DataFrameModel):
-    """Raw timeseries data schema from database."""
+    """Raw timeseries data schema from database.
+
+    Reason: ge=0 dropped because ERCOT LMPs can go negative during
+    oversupply windows (high wind + low load) — negative prices are
+    real and the model needs to learn that signal.
+    """
 
     ts: datetime = pa.Field(nullable=False)
-    value: float = pa.Field(nullable=False, ge=0)
+    value: float = pa.Field(nullable=False)
 
     class Config:
         strict = True
@@ -30,7 +35,7 @@ class ProphetInputSchema(pa.DataFrameModel):
     """Prophet model input schema (pandas required)."""
 
     ds: datetime = pa.Field(nullable=False)
-    y: float = pa.Field(nullable=False, ge=0)
+    y: float = pa.Field(nullable=False)
 
     class Config:
         strict = True

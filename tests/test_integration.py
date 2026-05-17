@@ -87,23 +87,29 @@ def seed_random_data(conn: psycopg2.extensions.connection, days: int = 60) -> No
 
 
 @contextmanager
-def mock_api(api_url: str) -> Generator[None]:
-    """Mock API and enable network for testcontainers.
+def mock_api(dataset: str) -> Generator[None]:
+    """Mock gridstatus.io REST (CSV format) + enable network for testcontainers.
 
     Args:
-        api_url: API URL to mock
-
-    Yields:
-        None
+        dataset: gridstatus dataset name (e.g. "ercot_spp_day_ahead_hourly")
     """
-    mock_response = {"prices": [[int(datetime.now(UTC).timestamp() * 1000), 50000.0]]}
-    pook.get(api_url).reply(200).json(mock_response)
+    os.environ.setdefault("GRIDSTATUS_API_KEY", "test-key-not-real")
+    ts_now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+    # return_format=csv yields CSV bodies; matches process._fetch_dataset.
+    csv_body = (
+        "interval_start_utc,interval_end_utc,location,location_type,market,spp\n"
+        f"{ts_now},{ts_now},HB_NORTH,Trading Hub,DAY_AHEAD_HOURLY,42.5\n"
+    )
+    pook.get(f"https://api.gridstatus.io/v1/datasets/{dataset}/query").persist().reply(
+        200
+    ).type("text/csv").body(csv_body)
     pook.enable_network("localhost", "127.0.0.1")
     pook.on()
     try:
         yield
     finally:
         pook.off()
+        pook.reset()
 
 
 def parse_prometheus_metrics(metrics_text: str) -> dict[str, float]:
@@ -154,7 +160,7 @@ class TestIntegration:
                 conn.close()
 
             # Act - run full pipeline with mocked API
-            with mock_api(test_config.api_url):
+            with mock_api(test_config.gridstatus_dataset):
                 app(test_config, mode="once")
 
             # Assert - verify model registered and inference works
@@ -233,7 +239,7 @@ class TestIntegration:
                 conn.close()
 
             # Act - run full pipeline with mocked API (triggers degradation detection)
-            with mock_api(test_config.api_url):
+            with mock_api(test_config.gridstatus_dataset):
                 # First run trains initial model (no current_champion)
                 app(test_config, mode="once")
 
