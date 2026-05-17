@@ -58,7 +58,9 @@ def _backoff_wait(attempt: int, suggested: float = 0.0) -> float:
 
 
 _GRIDSTATUS_BASE: Final[str] = "https://api.gridstatus.io/v1"
-_PAGE_SIZE: Final[int] = 10_000
+# NOTE: don't pass `limit` to the query — gridstatus treats it as a
+# total-rows cap (not per-page). Letting it default = server-side
+# page_size=50000 + cursor pagination walks the full window.
 _HTTP_TIMEOUT: Final[float] = 60.0
 
 
@@ -152,12 +154,9 @@ def _fetch_dataset(
                 "end_time": end.strftime("%Y-%m-%dT%H:%M:%S"),
                 "filter_column": filter_column,
                 "filter_value": filter_value,
-                "limit": _PAGE_SIZE,
-                # Reason: JSON (not CSV) so we can read `meta.cursor` from
-                # the response body — CSV format omits cursor info entirely
-                # and silently terminates pagination after one page.
-                # array-of-arrays keeps payload compact (column names once
-                # in meta, rows as bare arrays).
+                # No `limit` — gridstatus treats it as a hard total cap.
+                # JSON+array-of-arrays so we can read meta.cursor for
+                # pagination (CSV omits cursor info entirely).
                 "return_format": "json",
                 "json_schema": "array-of-arrays",
             }
