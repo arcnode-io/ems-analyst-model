@@ -12,7 +12,6 @@ key never lands in URL query-string logs.
 GRIDSTATUS_API_KEY env var feeds the header.
 """
 
-import io
 import logging
 import os
 import re
@@ -154,7 +153,13 @@ def _fetch_dataset(
                 "filter_column": filter_column,
                 "filter_value": filter_value,
                 "limit": _PAGE_SIZE,
-                "return_format": "csv",
+                # Reason: JSON (not CSV) so we can read `meta.cursor` from
+                # the response body — CSV format omits cursor info entirely
+                # and silently terminates pagination after one page.
+                # array-of-arrays keeps payload compact (column names once
+                # in meta, rows as bare arrays).
+                "return_format": "json",
+                "json_schema": "array-of-arrays",
             }
             if cursor:
                 params["cursor"] = cursor
@@ -162,10 +167,13 @@ def _fetch_dataset(
                 "📡 gridstatus page %d (cursor=%s)", page, "yes" if cursor else "first"
             )
             resp = _request_with_429_retry(client, url, params, headers)
-            body = resp.text
-            cursor = resp.headers.get("x-next-page-cursor")
-            if body.strip():
-                page_df = pl.read_csv(io.StringIO(body))
+            payload = resp.json()
+            meta = payload.get("meta", {})
+            cursor = meta.get("cursor") if meta.get("hasNextPage") else None
+            cols = meta.get("columns", [])
+            rows = payload.get("data", [])
+            if rows and cols:
+                page_df = pl.DataFrame(rows, schema=cols, orient="row")
                 log.info("📥 page %d: %d rows", page, page_df.height)
                 frames.append(page_df)
             if not cursor:
