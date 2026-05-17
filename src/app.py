@@ -78,21 +78,36 @@ def run_pipeline(config: Config) -> None:
         config: Configuration object
     """
     try:
-        logging.info("Starting ML pipeline")
+        logging.info("🚀 ML pipeline starting")
 
         # ETL
         process(config)
 
         # Train models
+        logging.info("🤖 training Prophet + XGBoost")
         result = train_models(config)
+        logging.info(
+            "🏆 champion: %s (prophet_mae=%.3f xgboost_mae=%.3f baseline_mae=%.3f)",
+            result.champion.value,
+            result.prophet_mae,
+            result.xgboost_mae,
+            result.baseline_mae,
+        )
 
         # Publish to MLflow
+        logging.info("📈 publishing to MLflow at %s", config.mlflow_tracking_uri)
         version = publish_to_mlflow(config, result)
-        logging.info(f"Published {result.champion.value} model as {version}")
+        logging.info(
+            "✨ published %s model as %s → models:/%s/%s",
+            result.champion.value,
+            version,
+            config.mlflow_model_name,
+            version,
+        )
 
-        logging.info("ML pipeline completed successfully")
+        logging.info("🎉 ML pipeline completed successfully")
     except Exception:
-        logging.exception("Pipeline failed")
+        logging.exception("💥 Pipeline failed")
         raise
 
 

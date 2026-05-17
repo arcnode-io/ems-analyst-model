@@ -100,12 +100,20 @@ def extract(config: Config) -> pl.DataFrame:
         start = datetime.strptime(config.backfill_start_date, "%Y-%m-%d").replace(
             tzinfo=UTC
         )
-        log.info("first run — backfilling from %s", start.isoformat())
+        log.info(
+            "🌱 first run — backfilling %s → %s",
+            start.date().isoformat(),
+            end.date().isoformat(),
+        )
     else:
         start = latest + timedelta(hours=1)
-        log.info("incremental pull from %s", start.isoformat())
+        log.info(
+            "🔄 incremental pull from %s → %s",
+            start.isoformat(),
+            end.isoformat(),
+        )
     if start >= end:
-        log.info("no new data to pull (start >= end)")
+        log.info("✅ already current — no new rows to pull")
         return pl.DataFrame(
             schema={"ts": pl.Datetime("us", "UTC"), "value": pl.Float64}
         )
@@ -134,12 +142,12 @@ def _fetch_dataset(
     url = f"{_GRIDSTATUS_BASE}/datasets/{dataset}/query"
     frames: list[pl.DataFrame] = []
     cursor: str | None = None
-    first = True
+    page = 0
     with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
         while True:
-            if not first:
+            if page > 0:
                 time.sleep(_PACE_SECONDS)
-            first = False
+            page += 1
             params: dict[str, Any] = {
                 "start_time": start.strftime("%Y-%m-%dT%H:%M:%S"),
                 "end_time": end.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -150,13 +158,20 @@ def _fetch_dataset(
             }
             if cursor:
                 params["cursor"] = cursor
+            log.info(
+                "📡 gridstatus page %d (cursor=%s)", page, "yes" if cursor else "first"
+            )
             resp = _request_with_429_retry(client, url, params, headers)
             body = resp.text
             cursor = resp.headers.get("x-next-page-cursor")
             if body.strip():
-                frames.append(pl.read_csv(io.StringIO(body)))
+                page_df = pl.read_csv(io.StringIO(body))
+                log.info("📥 page %d: %d rows", page, page_df.height)
+                frames.append(page_df)
             if not cursor:
                 break
+    total = sum(f.height for f in frames)
+    log.info("📦 fetched %d rows across %d page(s)", total, page)
     if not frames:
         return pl.DataFrame(
             schema={"ts": pl.Datetime("us", "UTC"), "value": pl.Float64}
@@ -256,11 +271,24 @@ def load(df: TimeseriesData, _config: Config) -> None:
             [(row["ts"], row["value"]) for row in df.iter_rows(named=True)],
         )
         conn.commit()
-    log.info("loaded %d rows into timeseries_data", df.height)
+    log.info("💾 loaded %d rows into timeseries_data", df.height)
 
 
 def process(config: Config) -> None:
     """Execute ETL: extract → transform → load."""
+    log.info(
+        "🌐 ETL start — dataset=%s location=%s",
+        config.gridstatus_dataset,
+        config.settlement_point,
+    )
     raw = extract(config)
     clean = transform(raw)
+    if not clean.is_empty():
+        log.info(
+            "🧹 transformed: %d rows, ts range %s → %s",
+            clean.height,
+            clean["ts"].min(),
+            clean["ts"].max(),
+        )
     load(clean, config)
+    log.info("✅ ETL done")
