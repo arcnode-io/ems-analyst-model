@@ -88,21 +88,33 @@ def seed_random_data(conn: psycopg2.extensions.connection, days: int = 60) -> No
 
 @contextmanager
 def mock_api(dataset: str) -> Generator[None]:
-    """Mock gridstatus.io REST (CSV format) + enable network for testcontainers.
+    """Mock gridstatus.io REST + enable network for testcontainers.
+
+    Shape: JSON `array-of-arrays` — data[0]=column headers, data[1:]=rows.
+    `meta.hasNextPage=False` so the pager stops after one fetch.
 
     Args:
         dataset: gridstatus dataset name (e.g. "ercot_spp_day_ahead_hourly")
     """
     os.environ.setdefault("GRIDSTATUS_API_KEY", "test-key-not-real")
     ts_now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
-    # return_format=csv yields CSV bodies; matches process._fetch_dataset.
-    csv_body = (
-        "interval_start_utc,interval_end_utc,location,location_type,market,spp\n"
-        f"{ts_now},{ts_now},HB_NORTH,Trading Hub,DAY_AHEAD_HOURLY,42.5\n"
-    )
+    payload = {
+        "data": [
+            [
+                "interval_start_utc",
+                "interval_end_utc",
+                "location",
+                "location_type",
+                "market",
+                "spp",
+            ],
+            [ts_now, ts_now, "HB_NORTH", "Trading Hub", "DAY_AHEAD_HOURLY", 42.5],
+        ],
+        "meta": {"hasNextPage": False, "cursor": None},
+    }
     pook.get(f"https://api.gridstatus.io/v1/datasets/{dataset}/query").persist().reply(
         200
-    ).type("text/csv").body(csv_body)
+    ).json(payload)
     pook.enable_network("localhost", "127.0.0.1")
     pook.on()
     try:

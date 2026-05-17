@@ -292,9 +292,13 @@ def load(df: TimeseriesData, _config: Config) -> None:
             "ON COMMIT DROP"
         )
         cur.copy_from(csv_buf, "_ts_stage", sep="\t", columns=("ts", "value"))
+        # SELECT DISTINCT ON dedupes any ts that snuck through (e.g. DST
+        # fall-back hour, or gridstatus revisions present in same window).
+        # ON CONFLICT cannot update the same row twice in one statement,
+        # so dedupe BEFORE the conflict clause sees the rows.
         cur.execute(
             "INSERT INTO timeseries_data (ts, value) "
-            "SELECT ts, value FROM _ts_stage "
+            "SELECT DISTINCT ON (ts) ts, value FROM _ts_stage ORDER BY ts "
             "ON CONFLICT (ts) DO UPDATE SET value = EXCLUDED.value"
         )
         conn.commit()
