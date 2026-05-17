@@ -170,9 +170,11 @@ def _fetch_dataset(
             payload = resp.json()
             meta = payload.get("meta", {})
             cursor = meta.get("cursor") if meta.get("hasNextPage") else None
-            cols = meta.get("columns", [])
-            rows = payload.get("data", [])
-            if rows and cols:
+            # array-of-arrays shape: data[0] = column header row,
+            # data[1:] = actual data rows. NOT meta.columns.
+            data = payload.get("data", [])
+            if len(data) > 1:
+                cols, rows = data[0], data[1:]
                 page_df = pl.DataFrame(rows, schema=cols, orient="row")
                 log.info("📥 page %d: %d rows", page, page_df.height)
                 frames.append(page_df)
