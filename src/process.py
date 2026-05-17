@@ -15,6 +15,8 @@ GRIDSTATUS_API_KEY env var feeds the header.
 import io
 import logging
 import os
+import re
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
@@ -27,6 +29,19 @@ from src.config import Config
 from src.models import TimeseriesData
 
 log = logging.getLogger(__name__)
+
+# Free tier: 1 req/sec, 30/min, 600/hr. Pace at 1.1s/req to stay clear of
+# the per-second limit even with network jitter.
+_PACE_SECONDS: Final[float] = 1.1
+_MAX_429_RETRIES: Final[int] = 3
+_DEFAULT_RETRY_SECONDS: Final[float] = 60.0
+
+
+def _parse_retry_seconds(body: str) -> float:
+    """Pull 'Try again in N seconds' out of gridstatus 429 JSON detail."""
+    m = re.search(r"in\s+(\d+)\s+seconds", body, re.IGNORECASE)
+    return float(m.group(1)) if m else _DEFAULT_RETRY_SECONDS
+
 
 _GRIDSTATUS_BASE: Final[str] = "https://api.gridstatus.io/v1"
 _PAGE_SIZE: Final[int] = 10_000
@@ -95,36 +110,70 @@ def _fetch_dataset(
     start: datetime,
     end: datetime,
 ) -> pl.DataFrame:
-    """Page through gridstatus REST returning a stitched polars DataFrame."""
+    """Page through gridstatus REST returning a stitched polars DataFrame.
+
+    Paces requests at 1.1s/each to stay clear of the free-tier 1-req/sec
+    limit. On 429, sleeps the gridstatus-suggested wait then retries.
+    """
     headers = {"x-api-key": os.environ["GRIDSTATUS_API_KEY"]}
     url = f"{_GRIDSTATUS_BASE}/datasets/{dataset}/query"
     frames: list[pl.DataFrame] = []
     cursor: str | None = None
-    while True:
-        params: dict[str, Any] = {
-            "start_time": start.strftime("%Y-%m-%dT%H:%M:%S"),
-            "end_time": end.strftime("%Y-%m-%dT%H:%M:%S"),
-            "filter_column": filter_column,
-            "filter_value": filter_value,
-            "limit": _PAGE_SIZE,
-            "return_format": "csv",
-        }
-        if cursor:
-            params["cursor"] = cursor
-        with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
-            resp = client.get(url, params=params, headers=headers)
-            resp.raise_for_status()
+    first = True
+    with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
+        while True:
+            if not first:
+                time.sleep(_PACE_SECONDS)
+            first = False
+            params: dict[str, Any] = {
+                "start_time": start.strftime("%Y-%m-%dT%H:%M:%S"),
+                "end_time": end.strftime("%Y-%m-%dT%H:%M:%S"),
+                "filter_column": filter_column,
+                "filter_value": filter_value,
+                "limit": _PAGE_SIZE,
+                "return_format": "csv",
+            }
+            if cursor:
+                params["cursor"] = cursor
+            resp = _request_with_429_retry(client, url, params, headers)
             body = resp.text
             cursor = resp.headers.get("x-next-page-cursor")
-        if body.strip():
-            frames.append(pl.read_csv(io.StringIO(body)))
-        if not cursor:
-            break
+            if body.strip():
+                frames.append(pl.read_csv(io.StringIO(body)))
+            if not cursor:
+                break
     if not frames:
         return pl.DataFrame(
             schema={"ts": pl.Datetime("us", "UTC"), "value": pl.Float64}
         )
     return pl.concat(frames)
+
+
+def _request_with_429_retry(
+    client: httpx.Client,
+    url: str,
+    params: dict[str, Any],
+    headers: dict[str, str],
+) -> httpx.Response:
+    """GET with 429-aware retry. Re-raises non-429 errors immediately."""
+    last: httpx.Response | None = None
+    for attempt in range(_MAX_429_RETRIES + 1):
+        resp = client.get(url, params=params, headers=headers)
+        last = resp
+        if resp.status_code != 429:
+            resp.raise_for_status()
+            return resp
+        wait = _parse_retry_seconds(resp.text)
+        log.warning(
+            "gridstatus 429 attempt %d/%d, sleeping %.0fs",
+            attempt + 1,
+            _MAX_429_RETRIES + 1,
+            wait,
+        )
+        time.sleep(wait)
+    assert last is not None
+    last.raise_for_status()
+    return last
 
 
 @pa.check_types
