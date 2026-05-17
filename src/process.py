@@ -33,14 +33,29 @@ log = logging.getLogger(__name__)
 # Free tier: 1 req/sec, 30/min, 600/hr. Pace at 1.1s/req to stay clear of
 # the per-second limit even with network jitter.
 _PACE_SECONDS: Final[float] = 1.1
-_MAX_429_RETRIES: Final[int] = 3
+# Retry/backoff numbers mirror gridstatusio SDK defaults (which are
+# presumably tuned for what they actually enforce, not just what's
+# documented). delay = _BACKOFF_BASE * (_BACKOFF_EXP ** attempt).
+_MAX_RETRIES: Final[int] = 5
+_BACKOFF_BASE: Final[float] = 2.0
+_BACKOFF_EXP: Final[float] = 2.0
 _DEFAULT_RETRY_SECONDS: Final[float] = 60.0
+# HTTP status codes we retry on (in addition to 429).
+_RETRY_STATUS: Final[frozenset[int]] = frozenset({500, 502, 503, 504})
 
 
 def _parse_retry_seconds(body: str) -> float:
     """Pull 'Try again in N seconds' out of gridstatus 429 JSON detail."""
     m = re.search(r"in\s+(\d+)\s+seconds", body, re.IGNORECASE)
     return float(m.group(1)) if m else _DEFAULT_RETRY_SECONDS
+
+
+def _backoff_wait(attempt: int, suggested: float = 0.0) -> float:
+    """Exponential backoff; take MAX of computed delay and any
+    server-suggested wait so we always honor a 429's 'try again in N'.
+    """
+    computed = _BACKOFF_BASE * (_BACKOFF_EXP**attempt)
+    return max(computed, suggested)
 
 
 _GRIDSTATUS_BASE: Final[str] = "https://api.gridstatus.io/v1"
@@ -155,25 +170,61 @@ def _request_with_429_retry(
     params: dict[str, Any],
     headers: dict[str, str],
 ) -> httpx.Response:
-    """GET with 429-aware retry. Re-raises non-429 errors immediately."""
-    last: httpx.Response | None = None
-    for attempt in range(_MAX_429_RETRIES + 1):
-        resp = client.get(url, params=params, headers=headers)
-        last = resp
-        if resp.status_code != 429:
-            resp.raise_for_status()
-            return resp
-        wait = _parse_retry_seconds(resp.text)
-        log.warning(
-            "gridstatus 429 attempt %d/%d, sleeping %.0fs",
-            attempt + 1,
-            _MAX_429_RETRIES + 1,
-            wait,
-        )
-        time.sleep(wait)
-    assert last is not None
-    last.raise_for_status()
-    return last
+    """GET with exponential-backoff retry on 429, 5xx, and network errors.
+
+    Mirrors gridstatusio SDK defaults: max 5 retries, base 2.0s, exp 2.0,
+    so worst case backs off 2 + 4 + 8 + 16 + 32 = 62s before giving up.
+    Honors 429 'try again in N seconds' as a floor on the next sleep.
+    """
+    last_exc: Exception | None = None
+    last_resp: httpx.Response | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = client.get(url, params=params, headers=headers)
+        except (httpx.NetworkError, httpx.TimeoutException) as e:
+            last_exc = e
+            wait = _backoff_wait(attempt)
+            log.warning(
+                "gridstatus network error %s attempt %d/%d, sleeping %.1fs",
+                type(e).__name__,
+                attempt + 1,
+                _MAX_RETRIES + 1,
+                wait,
+            )
+            time.sleep(wait)
+            continue
+        last_resp = resp
+        if resp.status_code == 429:
+            suggested = _parse_retry_seconds(resp.text)
+            wait = _backoff_wait(attempt, suggested=suggested)
+            log.warning(
+                "gridstatus 429 attempt %d/%d, sleeping %.1fs",
+                attempt + 1,
+                _MAX_RETRIES + 1,
+                wait,
+            )
+            time.sleep(wait)
+            continue
+        if resp.status_code in _RETRY_STATUS:
+            wait = _backoff_wait(attempt)
+            log.warning(
+                "gridstatus %d attempt %d/%d, sleeping %.1fs",
+                resp.status_code,
+                attempt + 1,
+                _MAX_RETRIES + 1,
+                wait,
+            )
+            time.sleep(wait)
+            continue
+        # Non-retriable response (or 2xx) — return/raise immediately.
+        resp.raise_for_status()
+        return resp
+    # Exhausted retries.
+    if last_resp is not None:
+        last_resp.raise_for_status()
+        return last_resp
+    assert last_exc is not None
+    raise last_exc
 
 
 @pa.check_types
