@@ -12,6 +12,7 @@ key never lands in URL query-string logs.
 GRIDSTATUS_API_KEY env var feeds the header.
 """
 
+import io
 import logging
 import os
 import re
@@ -270,17 +271,34 @@ def transform(raw: pl.DataFrame) -> TimeseriesData:
 
 @pa.check_types
 def load(df: TimeseriesData, _config: Config) -> None:
-    """Upsert into timeseries_data — ON CONFLICT keeps latest value."""
+    """Upsert into timeseries_data via COPY + temp table.
+
+    Row-by-row INSERT over a remote postgres = ~50ms RTT * N rows;
+    38K rows took 15+ min without finishing. COPY streams in seconds,
+    then a single MERGE-style INSERT...SELECT...ON CONFLICT applies the
+    upsert. Total: a few seconds for tens of thousands of rows.
+    """
     if df.is_empty():
         return
+    csv_buf = io.StringIO()
+    for row in df.iter_rows(named=True):
+        # ISO-8601 with explicit UTC suffix — Postgres timestamptz parses cleanly.
+        ts_str = row["ts"].isoformat()
+        csv_buf.write(f"{ts_str}\t{row['value']}\n")
+    csv_buf.seek(0)
     with _connect() as conn, conn.cursor() as cur:
-        cur.executemany(
-            "INSERT INTO timeseries_data (ts, value) VALUES (%s, %s) "
-            "ON CONFLICT (ts) DO UPDATE SET value = EXCLUDED.value",
-            [(row["ts"], row["value"]) for row in df.iter_rows(named=True)],
+        cur.execute(
+            "CREATE TEMP TABLE _ts_stage (ts TIMESTAMPTZ, value DOUBLE PRECISION) "
+            "ON COMMIT DROP"
+        )
+        cur.copy_from(csv_buf, "_ts_stage", sep="\t", columns=("ts", "value"))
+        cur.execute(
+            "INSERT INTO timeseries_data (ts, value) "
+            "SELECT ts, value FROM _ts_stage "
+            "ON CONFLICT (ts) DO UPDATE SET value = EXCLUDED.value"
         )
         conn.commit()
-    log.info("💾 loaded %d rows into timeseries_data", df.height)
+    log.info("💾 loaded %d rows into timeseries_data via COPY", df.height)
 
 
 def process(config: Config) -> None:
