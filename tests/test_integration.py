@@ -220,6 +220,25 @@ class TestIntegration:
             assert predictions is not None
             assert len(predictions) == 7
 
+            # Assert forecasts table populated by score+write step
+            verify_conn = psycopg2.connect(pg.url)
+            try:
+                verify_cur = verify_conn.cursor()
+                verify_cur.execute(
+                    "SELECT COUNT(*), MIN(site_id), MIN(measurement), MIN(unit) "
+                    "FROM forecasts"
+                )
+                row = verify_cur.fetchone()
+                assert row is not None
+                count, site_id, measurement, unit = row
+                assert count == test_config.forecast_horizon_hours
+                assert site_id == test_config.settlement_point
+                assert measurement == test_config.forecast_measurement
+                assert unit == test_config.forecast_unit
+                verify_cur.close()
+            finally:
+                verify_conn.close()
+
     def test_pushes_metrics_via_prometheus(self) -> None:
         """Test that MAE metrics are pushed to Prometheus Pushgateway on degradation.
 

@@ -12,6 +12,7 @@ from mlflow.tracking.fluent import log_metric, log_param, start_run
 from src.config import Config
 from src.models import SCHEDULE_POLL_INTERVAL_SECONDS, PredictiveModels
 from src.process import process
+from src.score import score, write_forecasts
 from src.train import TrainingResult, get_model_mae, train_models
 from src.utils import create_xgboost_input_example
 
@@ -104,6 +105,12 @@ def run_pipeline(config: Config) -> None:
             config.mlflow_model_name,
             version,
         )
+
+        # Score the champion and write forecasts to Postgres for the
+        # agent + HMI to read via server's REST endpoints.
+        logging.info("🔮 scoring champion for next %dh", config.forecast_horizon_hours)
+        forecasts_df = score(config, result)
+        write_forecasts(forecasts_df, config, int(version.lstrip("v")))
 
         logging.info("🎉 ML pipeline completed successfully")
     except Exception:

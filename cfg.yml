@@ -11,6 +11,9 @@ local:
   prophet_daily_seasonality: true
   prophet_weekly_seasonality: true
   prophet_yearly_seasonality: true
+  forecast_measurement: dam_lmp_price
+  forecast_unit: usd_per_mwh
+  forecast_horizon_hours: 24
 beta:
   log_level: INFO
   iso: ercot
@@ -24,3 +27,6 @@ beta:
   prophet_daily_seasonality: true
   prophet_weekly_seasonality: true
   prophet_yearly_seasonality: true
+  forecast_measurement: dam_lmp_price
+  forecast_unit: usd_per_mwh
+  forecast_horizon_hours: 24

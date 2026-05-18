@@ -29,6 +29,9 @@ class Config(BaseModel):  # noqa: D101
     prophet_daily_seasonality: bool = True
     prophet_weekly_seasonality: bool = True
     prophet_yearly_seasonality: bool = True
+    forecast_measurement: str
+    forecast_unit: str
+    forecast_horizon_hours: int
 
 
 class _ConfigMap(BaseModel):
