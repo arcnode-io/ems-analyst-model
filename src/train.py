@@ -24,6 +24,7 @@ from src.models import (
     LIGHTGBM_MAX_DEPTH,
     LIGHTGBM_N_ESTIMATORS,
     LIGHTGBM_RANDOM_STATE,
+    MIN_LAG_HISTORY_HOURS,
     TRAIN_TEST_SPLIT_DAYS,
     XGBOOST_FEATURE_COLUMNS,
     XGBOOST_LEARNING_RATE,
@@ -95,7 +96,12 @@ def train_prophet(
 
 
 def create_xgboost_features(df: pl.DataFrame) -> pl.DataFrame:
-    """Time-derived features shared by XGBoost + LightGBM."""
+    """Time-derived + lagged-value features shared by XGBoost + LightGBM.
+
+    Assumes input df is sorted by ts and hourly-spaced. Lags use polars
+    shift — first 24/168 rows of the dataframe will have null lag values
+    and must be dropped before training (handled by `_featurize`).
+    """
     return df.with_columns(
         [
             pl.col("ts").dt.hour().alias("hour"),
@@ -105,6 +111,8 @@ def create_xgboost_features(df: pl.DataFrame) -> pl.DataFrame:
             pl.col("ts").dt.weekday().alias("dayofweek"),
             pl.col("ts").dt.ordinal_day().alias("dayofyear"),
             pl.col("ts").dt.week().alias("weekofyear"),
+            pl.col("value").shift(24).alias("value_lag_24h"),
+            pl.col("value").shift(MIN_LAG_HISTORY_HOURS).alias("value_lag_168h"),
         ]
     )
 
@@ -112,8 +120,18 @@ def create_xgboost_features(df: pl.DataFrame) -> pl.DataFrame:
 def _featurize(
     train_df: pl.DataFrame, test_df: pl.DataFrame
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Add time features to both splits."""
-    return create_xgboost_features(train_df), create_xgboost_features(test_df)
+    """Add features to both splits + drop NaN-lag rows from train head.
+
+    The test set's lags are filled because the lag values come from the
+    train tail (we featurize on the concatenated set then re-split on
+    timestamp).
+    """
+    full = pl.concat([train_df, test_df]).sort("ts")
+    full_feat = create_xgboost_features(full).drop_nulls(subset=["value_lag_168h"])
+    train_max_ts = train_df["ts"].max()
+    train_feat = full_feat.filter(pl.col("ts") <= train_max_ts)
+    test_feat = full_feat.filter(pl.col("ts") > train_max_ts)
+    return train_feat, test_feat
 
 
 def train_xgboost(

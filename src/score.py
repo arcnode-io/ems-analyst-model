@@ -21,7 +21,7 @@ from xgboost.sklearn import XGBRegressor
 
 from src.config import Config
 from src.models import XGBOOST_FEATURE_COLUMNS, PredictiveModels
-from src.train import TrainingResult, create_xgboost_features
+from src.train import TrainingResult
 
 log = logging.getLogger(__name__)
 
@@ -81,13 +81,53 @@ def _score_prophet(model: Prophet, future_ts: list[datetime]) -> list[float]:
     return forecast["yhat"].astype(float).tolist()
 
 
+def _load_history_for_lags() -> pl.DataFrame:
+    """Pull the last 7 days of (ts, value) from timeseries_data.
+
+    Needed by `_score_tree` to populate lag_24h + lag_168h features
+    for the forecast horizon. 7 days is the longest lag (168h).
+    """
+    with _connect() as conn:
+        return pl.read_database(
+            "SELECT ts, value FROM timeseries_data " "ORDER BY ts DESC LIMIT 200",
+            connection=conn,
+        ).sort("ts")
+
+
 def _score_tree(
-    model: XGBRegressor | LGBMRegressor, future_ts: list[datetime]
+    model: XGBRegressor | LGBMRegressor,
+    future_ts: list[datetime],
+    history: pl.DataFrame,
 ) -> list[float]:
-    """Either tree model predicts on the shared time-derived features."""
-    df = pl.DataFrame({"ts": future_ts})
-    features = create_xgboost_features(df)
-    x = features.select(XGBOOST_FEATURE_COLUMNS).to_numpy()
+    """Predict tree model on time + lagged-value features.
+
+    Builds feature rows by joining each future_ts to its lag values
+    from `history` (the most recent actuals). Falls back to the most
+    recent available actual if exact-ts lookup misses (won't happen
+    with hourly data + a fresh ETL run, but defensive).
+    """
+    rows: list[dict[str, float | int | datetime]] = []
+    hist_by_ts = {row["ts"]: row["value"] for row in history.iter_rows(named=True)}
+    most_recent_value = history["value"][-1] if not history.is_empty() else 0.0
+    for ts in future_ts:
+        lag_24 = hist_by_ts.get(ts - timedelta(hours=24), most_recent_value)
+        lag_168 = hist_by_ts.get(ts - timedelta(hours=168), most_recent_value)
+        rows.append(
+            {
+                "ts": ts,
+                "hour": ts.hour,
+                "day": ts.day,
+                "month": ts.month,
+                "year": ts.year,
+                "dayofweek": ts.weekday(),
+                "dayofyear": ts.timetuple().tm_yday,
+                "weekofyear": int(ts.isocalendar()[1]),
+                "value_lag_24h": float(lag_24),
+                "value_lag_168h": float(lag_168),
+            }
+        )
+    feat_df = pl.DataFrame(rows)
+    x = feat_df.select(XGBOOST_FEATURE_COLUMNS).to_numpy()
     return [float(v) for v in model.predict(x)]
 
 
@@ -102,9 +142,13 @@ def score(config: Config, result: TrainingResult) -> pl.DataFrame:
         case PredictiveModels.PROPHET:
             values = _score_prophet(result.prophet_model, future_ts)
         case PredictiveModels.XGBOOST:
-            values = _score_tree(result.xgboost_model, future_ts)
+            values = _score_tree(
+                result.xgboost_model, future_ts, _load_history_for_lags()
+            )
         case PredictiveModels.LIGHTGBM:
-            values = _score_tree(result.lightgbm_model, future_ts)
+            values = _score_tree(
+                result.lightgbm_model, future_ts, _load_history_for_lags()
+            )
     return pl.DataFrame({"forecast_for": future_ts, "value": values})
 
 

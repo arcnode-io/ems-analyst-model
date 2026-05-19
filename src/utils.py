@@ -6,23 +6,19 @@ from src.models import XGBOOST_FEATURE_COLUMNS
 
 
 def create_xgboost_input_example(timestamp: pd.Timestamp) -> pd.DataFrame:
-    """Create XGBoost input example from timestamp.
+    """One-row input example used by MLflow for signature inference.
 
-    Args:
-        timestamp: Input timestamp
-
-    Returns:
-        DataFrame with time-based features for XGBoost
+    Time features come from the timestamp; lag values are zero
+    placeholders — the real prediction-time values come from the
+    history lookup in score._score_tree. MLflow just needs the schema
+    to match (column names + dtypes).
     """
-    return pd.DataFrame(
-        {
-            col: [
-                (
-                    getattr(timestamp, col)
-                    if col != "weekofyear"
-                    else timestamp.isocalendar().week
-                )
-            ]
-            for col in XGBOOST_FEATURE_COLUMNS
-        }
-    )
+    row: dict[str, object] = {}
+    for col in XGBOOST_FEATURE_COLUMNS:
+        if col == "weekofyear":
+            row[col] = int(timestamp.isocalendar().week)
+        elif col.startswith("value_lag_"):
+            row[col] = 0.0
+        else:
+            row[col] = getattr(timestamp, col)
+    return pd.DataFrame({k: [v] for k, v in row.items()})

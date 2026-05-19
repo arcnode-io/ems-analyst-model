@@ -42,17 +42,19 @@ def create_timeseries_table(timeseries_url: str) -> psycopg2.extensions.connecti
 
 
 def seed_trending_data(conn: psycopg2.extensions.connection, days: int = 60) -> None:
-    """Seed database with deterministic trending test data.
+    """Seed deterministic trending hourly data.
 
-    Args:
-        conn: Database connection
-        days: Number of days of data to generate
+    Real ETL produces hourly DAM SPP rows. Tree-model lag features
+    (`value_lag_24h`, `value_lag_168h`) need at least 168 hourly rows
+    to populate, so 60 daily rows wouldn't work. 60 days * 24h = 1440
+    rows is comfortably above the lag horizon.
     """
     cursor = conn.cursor()
-    now = datetime.now(UTC)
-    for i in range(days):
-        ts = now - timedelta(days=days - i)
-        value = 50000 + (i * 200)
+    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    total_hours = days * 24
+    for i in range(total_hours):
+        ts = now - timedelta(hours=total_hours - i)
+        value = 50000 + (i * 5)
         cursor.execute(
             "INSERT INTO timeseries_data (ts, value) VALUES (%s, %s)",
             (ts, value),

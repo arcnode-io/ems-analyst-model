@@ -91,7 +91,9 @@ LIGHTGBM_LEARNING_RATE: Final[float] = 0.1
 LIGHTGBM_MAX_DEPTH: Final[int] = 5
 LIGHTGBM_RANDOM_STATE: Final[int] = 42
 
-# XGBoost feature columns
+# Tree-model feature columns — same set XGBoost + LightGBM use.
+# Lags added 2026-05-19: same hour yesterday (24h) + last week (168h)
+# often help autoregressive structure that pure time features miss.
 XGBOOST_FEATURE_COLUMNS: Final[list[str]] = [
     "hour",
     "day",
@@ -100,7 +102,15 @@ XGBOOST_FEATURE_COLUMNS: Final[list[str]] = [
     "dayofweek",
     "dayofyear",
     "weekofyear",
+    "value_lag_24h",
+    "value_lag_168h",
 ]
+
+# Hours of history required before any training row has its full lag
+# features populated. Rows older than this are dropped from the train
+# set (and need to exist in the source data to populate the test set's
+# earliest lags).
+MIN_LAG_HISTORY_HOURS: Final[int] = 168
 
 # Scheduling
 SCHEDULE_POLL_INTERVAL_SECONDS: Final[int] = 60
