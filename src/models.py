@@ -13,6 +13,7 @@ class PredictiveModels(enum.StrEnum):
 
     PROPHET = "Prophet"
     XGBOOST = "XGBoost"
+    LIGHTGBM = "LightGBM"
 
 
 class TimeseriesDataSchema(pa.DataFrameModel):
@@ -83,6 +84,12 @@ XGBOOST_N_ESTIMATORS: Final[int] = 100
 XGBOOST_LEARNING_RATE: Final[float] = 0.1
 XGBOOST_MAX_DEPTH: Final[int] = 5
 XGBOOST_RANDOM_STATE: Final[int] = 42
+
+# LightGBM hyperparameters — match XGBoost so the comparison is algo-only.
+LIGHTGBM_N_ESTIMATORS: Final[int] = 100
+LIGHTGBM_LEARNING_RATE: Final[float] = 0.1
+LIGHTGBM_MAX_DEPTH: Final[int] = 5
+LIGHTGBM_RANDOM_STATE: Final[int] = 42
 
 # XGBoost feature columns
 XGBOOST_FEATURE_COLUMNS: Final[list[str]] = [

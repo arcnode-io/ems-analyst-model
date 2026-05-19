@@ -32,10 +32,10 @@ _baseline_mae = Gauge(
 _challenger_mae = Gauge(
     "challenger_mae", "MAE of the best challenger model on the holdout window"
 )
-# Encoded as int gauge: 1=Prophet, 2=XGBoost. Same scheme as the old
-# pushgateway code so dashboards/alerts don't need to change semantics.
+# Encoded as int gauge: 1=Prophet, 2=XGBoost, 3=LightGBM.
 _champion_model = Gauge(
-    "champion_model", "Current champion model encoded (1=Prophet, 2=XGBoost)"
+    "champion_model",
+    "Current champion model encoded (1=Prophet, 2=XGBoost, 3=LightGBM)",
 )
 _model_version = Gauge(
     "model_version", "MLflow registry version of the currently published model"
@@ -53,23 +53,39 @@ def start_metrics_server(port: int = _DEFAULT_METRICS_PORT) -> None:
     log.info("📊 metrics endpoint serving on :%d/metrics", port)
 
 
+_CHAMPION_ENCODING: dict[PredictiveModels, int] = {
+    PredictiveModels.PROPHET: 1,
+    PredictiveModels.XGBOOST: 2,
+    PredictiveModels.LIGHTGBM: 3,
+}
+
+
+def _best_challenger_mae(result: TrainingResult) -> float:
+    """Lowest MAE among non-champion models."""
+    all_maes: dict[PredictiveModels, float] = {
+        PredictiveModels.PROPHET: result.prophet_mae,
+        PredictiveModels.XGBOOST: result.xgboost_mae,
+        PredictiveModels.LIGHTGBM: result.lightgbm_mae,
+    }
+    return min(v for k, v in all_maes.items() if k != result.champion)
+
+
 def update_gauges(result: TrainingResult, model_version: int) -> None:
     """Update every gauge from a completed training run."""
     champion_mae = get_model_mae(
-        result.champion, result.prophet_mae, result.xgboost_mae
+        result.champion,
+        result.prophet_mae,
+        result.xgboost_mae,
+        result.lightgbm_mae,
     )
-    challenger_mae = (
-        result.xgboost_mae
-        if result.champion == PredictiveModels.PROPHET
-        else result.prophet_mae
-    )
+    challenger_mae = _best_challenger_mae(result)
     _champion_mae.set(champion_mae)
     _baseline_mae.set(result.baseline_mae)
     _challenger_mae.set(challenger_mae)
-    _champion_model.set(1 if result.champion == PredictiveModels.PROPHET else 2)
+    _champion_model.set(_CHAMPION_ENCODING[result.champion])
     _model_version.set(model_version)
     log.info(
-        "📈 gauges updated: champion=%s mae=%.3f baseline=%.3f challenger=%.3f v=%d",
+        "📈 gauges: champion=%s mae=%.3f baseline=%.3f challenger=%.3f v=%d",
         result.champion.value,
         champion_mae,
         result.baseline_mae,

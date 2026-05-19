@@ -26,6 +26,7 @@ dependencies = [
     "xgboost>=2.1.0",
     "httpx>=0.28.1",
     "boto3>=1.43.9",
+    "lightgbm>=4.5.0",
 ]
 
 [dependency-groups]

@@ -7,7 +7,7 @@ import polars as pl
 from prophet import Prophet
 from xgboost.sklearn import XGBRegressor
 
-from src.score import _future_hours, _score_prophet, _score_xgboost
+from src.score import _future_hours, _score_prophet, _score_tree
 
 
 def test_future_hours_returns_horizon_count() -> None:
@@ -63,11 +63,10 @@ def test_score_prophet_returns_one_value_per_timestamp() -> None:
     assert all(isinstance(v, float) for v in actual)
 
 
-def test_score_xgboost_returns_one_value_per_timestamp() -> None:
+def test_score_tree_xgboost_returns_one_value_per_timestamp() -> None:
     """XGBoost trained on time-features returns N predictions for N ts."""
-    # Arrange — train tiny XGBoost on hour-of-day → value mapping
-    from src.train import create_xgboost_features
     from src.models import XGBOOST_FEATURE_COLUMNS
+    from src.train import create_xgboost_features
 
     ts_train = [datetime(2024, 1, 1, h, tzinfo=UTC) for h in range(24)]
     train_df = pl.DataFrame({"ts": ts_train, "value": [float(h) for h in range(24)]})
@@ -77,8 +76,26 @@ def test_score_xgboost_returns_one_value_per_timestamp() -> None:
     model = XGBRegressor(n_estimators=5, max_depth=2, random_state=42)
     model.fit(x_train, y_train)
     future = [datetime.now(UTC) + timedelta(hours=i) for i in range(3)]
-    # Act
-    actual = _score_xgboost(model, future)
-    # Assert
+    actual = _score_tree(model, future)
+    assert len(actual) == 3
+    assert all(isinstance(v, float) for v in actual)
+
+
+def test_score_tree_lightgbm_returns_one_value_per_timestamp() -> None:
+    """LightGBM trained on time-features returns N predictions for N ts."""
+    from lightgbm import LGBMRegressor
+
+    from src.models import XGBOOST_FEATURE_COLUMNS
+    from src.train import create_xgboost_features
+
+    ts_train = [datetime(2024, 1, 1, h, tzinfo=UTC) for h in range(24)]
+    train_df = pl.DataFrame({"ts": ts_train, "value": [float(h) for h in range(24)]})
+    features = create_xgboost_features(train_df)
+    x_train = features.select(XGBOOST_FEATURE_COLUMNS).to_numpy()
+    y_train = features["value"].to_numpy()
+    model = LGBMRegressor(n_estimators=5, max_depth=2, random_state=42, verbose=-1)
+    model.fit(x_train, y_train)
+    future = [datetime.now(UTC) + timedelta(hours=i) for i in range(3)]
+    actual = _score_tree(model, future)
     assert len(actual) == 3
     assert all(isinstance(v, float) for v in actual)

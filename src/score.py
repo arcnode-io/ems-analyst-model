@@ -15,6 +15,7 @@ from typing import Final
 import pandas as pd
 import polars as pl
 import psycopg2
+from lightgbm import LGBMRegressor
 from prophet import Prophet
 from xgboost.sklearn import XGBRegressor
 
@@ -80,8 +81,10 @@ def _score_prophet(model: Prophet, future_ts: list[datetime]) -> list[float]:
     return forecast["yhat"].astype(float).tolist()
 
 
-def _score_xgboost(model: XGBRegressor, future_ts: list[datetime]) -> list[float]:
-    """XGBoost predicts on the same time-derived features train_xgboost used."""
+def _score_tree(
+    model: XGBRegressor | LGBMRegressor, future_ts: list[datetime]
+) -> list[float]:
+    """Either tree model predicts on the shared time-derived features."""
     df = pl.DataFrame({"ts": future_ts})
     features = create_xgboost_features(df)
     x = features.select(XGBOOST_FEATURE_COLUMNS).to_numpy()
@@ -99,7 +102,9 @@ def score(config: Config, result: TrainingResult) -> pl.DataFrame:
         case PredictiveModels.PROPHET:
             values = _score_prophet(result.prophet_model, future_ts)
         case PredictiveModels.XGBOOST:
-            values = _score_xgboost(result.xgboost_model, future_ts)
+            values = _score_tree(result.xgboost_model, future_ts)
+        case PredictiveModels.LIGHTGBM:
+            values = _score_tree(result.lightgbm_model, future_ts)
     return pl.DataFrame({"forecast_for": future_ts, "value": values})
 
 

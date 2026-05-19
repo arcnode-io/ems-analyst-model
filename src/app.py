@@ -31,37 +31,43 @@ def publish_to_mlflow(config: Config, result: TrainingResult) -> str:
     mlflow.set_tracking_uri(config.mlflow_tracking_uri)
 
     with start_run():
-        # Log metrics
         champion_mae = get_model_mae(
-            result.champion, result.prophet_mae, result.xgboost_mae
+            result.champion,
+            result.prophet_mae,
+            result.xgboost_mae,
+            result.lightgbm_mae,
         )
         log_metric("champion_mae", champion_mae)
         log_metric("prophet_mae", result.prophet_mae)
         log_metric("xgboost_mae", result.xgboost_mae)
+        log_metric("lightgbm_mae", result.lightgbm_mae)
         log_metric("baseline_mae", result.baseline_mae)
-
-        # Log parameters
         log_param("champion_model", result.champion.value)
 
-        # Log champion model with input_example for signature inference
-        if result.champion == PredictiveModels.PROPHET:
-            # Prophet expects DataFrame with 'ds' column (datetime)
-            input_example = pd.DataFrame({"ds": [pd.Timestamp.now()]})
-            mlflow.prophet.log_model(
-                result.prophet_model,
-                name="model",
-                registered_model_name=config.mlflow_model_name,
-                input_example=input_example,
-            )
-        else:
-            # XGBoost expects DataFrame with time-based features
-            input_example = create_xgboost_input_example(pd.Timestamp.now())
-            mlflow.xgboost.log_model(
-                result.xgboost_model,
-                name="model",
-                registered_model_name=config.mlflow_model_name,
-                input_example=input_example,
-            )
+        # Per-champion log path — Prophet wants a DataFrame with a ds
+        # column; tree models want a feature-row DataFrame.
+        match result.champion:
+            case PredictiveModels.PROPHET:
+                mlflow.prophet.log_model(
+                    result.prophet_model,
+                    name="model",
+                    registered_model_name=config.mlflow_model_name,
+                    input_example=pd.DataFrame({"ds": [pd.Timestamp.now()]}),
+                )
+            case PredictiveModels.XGBOOST:
+                mlflow.xgboost.log_model(
+                    result.xgboost_model,
+                    name="model",
+                    registered_model_name=config.mlflow_model_name,
+                    input_example=create_xgboost_input_example(pd.Timestamp.now()),
+                )
+            case PredictiveModels.LIGHTGBM:
+                mlflow.lightgbm.log_model(
+                    result.lightgbm_model,
+                    name="model",
+                    registered_model_name=config.mlflow_model_name,
+                    input_example=create_xgboost_input_example(pd.Timestamp.now()),
+                )
 
         # Get version
         client = MlflowClient()
@@ -86,13 +92,14 @@ def run_pipeline(config: Config) -> None:
         process(config)
 
         # Train models
-        logging.info("🤖 training Prophet + XGBoost")
+        logging.info("🤖 training Prophet + XGBoost + LightGBM")
         result = train_models(config)
         logging.info(
-            "🏆 champion: %s (prophet_mae=%.3f xgboost_mae=%.3f baseline_mae=%.3f)",
+            "🏆 champion: %s (prophet=%.3f xgboost=%.3f lightgbm=%.3f baseline=%.3f)",
             result.champion.value,
             result.prophet_mae,
             result.xgboost_mae,
+            result.lightgbm_mae,
             result.baseline_mae,
         )
 

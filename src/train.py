@@ -1,17 +1,29 @@
-"""Model training pipeline with champion/challenger pattern."""
+"""Model training pipeline with champion/challenger pattern.
 
+Three models trained per run: Prophet (seasonality), XGBoost + LightGBM
+(both gradient-boosted trees on the same time-based features). Champion
+is whichever has lowest holdout MAE; if all three lose to the naive
+baseline (mean), system degradation is logged.
+"""
+
+import logging
 import os
 from datetime import datetime, timedelta
 
 import polars as pl
 import psycopg2
-from xgboost.sklearn import XGBRegressor
+from lightgbm import LGBMRegressor
 from prophet import Prophet
 from pydantic import BaseModel, ConfigDict
 from sklearn.metrics import mean_absolute_error
+from xgboost.sklearn import XGBRegressor
 
 from src.config import Config
 from src.models import (
+    LIGHTGBM_LEARNING_RATE,
+    LIGHTGBM_MAX_DEPTH,
+    LIGHTGBM_N_ESTIMATORS,
+    LIGHTGBM_RANDOM_STATE,
     TRAIN_TEST_SPLIT_DAYS,
     XGBOOST_FEATURE_COLUMNS,
     XGBOOST_LEARNING_RATE,
@@ -29,39 +41,27 @@ class TrainingResult(BaseModel):
 
     prophet_mae: float
     xgboost_mae: float
+    lightgbm_mae: float
     baseline_mae: float
     champion: PredictiveModels
     prophet_model: Prophet
     xgboost_model: XGBRegressor
+    lightgbm_model: LGBMRegressor
 
 
 def load_timeseries_data(_config: Config) -> pl.DataFrame:
-    """Load timeseries data from TimescaleDB.
-
-    Args:
-        config: Configuration object
-
-    Returns:
-        Timeseries DataFrame
-    """
+    """Load timeseries data from Postgres."""
     with psycopg2.connect(os.environ["TIMESERIES_URL"]) as conn:
-        query = "SELECT ts, value FROM timeseries_data ORDER BY ts"
-        df = pl.read_database(query, connection=conn)
+        df = pl.read_database(
+            "SELECT ts, value FROM timeseries_data ORDER BY ts", connection=conn
+        )
     return df
 
 
 def split_train_test(
     df: pl.DataFrame, test_days: int = TRAIN_TEST_SPLIT_DAYS
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Split data into train and test sets.
-
-    Args:
-        df: Input DataFrame
-        test_days: Number of days to use for testing
-
-    Returns:
-        Tuple of (train_df, test_df)
-    """
+    """Time-ordered split — last `test_days` for holdout."""
     max_ts = df["ts"].max()
     assert isinstance(max_ts, datetime)
     split_date = max_ts - timedelta(days=test_days)  # type: ignore[operator]
@@ -73,56 +73,29 @@ def split_train_test(
 def train_prophet(
     train_df: pl.DataFrame, test_df: pl.DataFrame, config: Config
 ) -> tuple[float, Prophet]:
-    """Train Prophet model and evaluate.
-
-    Args:
-        train_df: Training DataFrame
-        test_df: Test DataFrame
-        config: Configuration object with Prophet settings
-
-    Returns:
-        Tuple of (MAE, trained_model)
-    """
-    import logging
-
-    # Convert to pandas for Prophet (Prophet requires pandas)
+    """Fit Prophet on train, predict test, return (MAE, model)."""
     prophet_train = train_df.to_pandas().rename(columns={"ts": "ds", "value": "y"})
     prophet_test = test_df.to_pandas().rename(columns={"ts": "ds", "value": "y"})
-
-    # Remove timezone (Prophet doesn't support timezone-aware datetimes)
     prophet_train["ds"] = prophet_train["ds"].dt.tz_localize(None)
     prophet_test["ds"] = prophet_test["ds"].dt.tz_localize(None)
-
-    # Train model
     logging.info("Training Prophet model...")
     model = Prophet(
         daily_seasonality=config.prophet_daily_seasonality,
         weekly_seasonality=config.prophet_weekly_seasonality,
         yearly_seasonality=config.prophet_yearly_seasonality,
         seasonality_mode="multiplicative",
-        uncertainty_samples=0,  # Disable uncertainty intervals for speed (doesn't affect yhat)
+        uncertainty_samples=0,
     )
     model.fit(prophet_train)
-    logging.info("Prophet training complete")
-
-    # Predict and evaluate
     forecast = model.predict(prophet_test[["ds"]])
-    y_true = test_df["value"].to_numpy()
-    y_pred = forecast["yhat"].to_numpy()
-
-    mae: float = mean_absolute_error(y_true, y_pred)
+    mae: float = mean_absolute_error(
+        test_df["value"].to_numpy(), forecast["yhat"].to_numpy()
+    )
     return mae, model
 
 
 def create_xgboost_features(df: pl.DataFrame) -> pl.DataFrame:
-    """Create time-based features for XGBoost.
-
-    Args:
-        df: Input DataFrame with ts column
-
-    Returns:
-        DataFrame with time-based features
-    """
+    """Time-derived features shared by XGBoost + LightGBM."""
     return df.with_columns(
         [
             pl.col("ts").dt.hour().alias("hour"),
@@ -136,196 +109,153 @@ def create_xgboost_features(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def _featurize(
+    train_df: pl.DataFrame, test_df: pl.DataFrame
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Add time features to both splits."""
+    return create_xgboost_features(train_df), create_xgboost_features(test_df)
+
+
 def train_xgboost(
     train_df: pl.DataFrame, test_df: pl.DataFrame
 ) -> tuple[float, XGBRegressor]:
-    """Train XGBoost model and evaluate.
-
-    Args:
-        train_df: Training DataFrame
-        test_df: Test DataFrame
-
-    Returns:
-        Tuple of (MAE, trained_model)
-    """
-    import logging
-
+    """Fit XGBoost on time features, return (MAE, model)."""
     logging.info("Training XGBoost model...")
-    # Create features
-    train_features = create_xgboost_features(train_df)
-    test_features = create_xgboost_features(test_df)
-
-    # Convert to numpy
-    X_train = train_features.select(XGBOOST_FEATURE_COLUMNS).to_numpy()  # noqa: N806
+    train_features, test_features = _featurize(train_df, test_df)
+    x_train = train_features.select(XGBOOST_FEATURE_COLUMNS).to_numpy()
     y_train = train_features["value"].to_numpy()
-    X_test = test_features.select(XGBOOST_FEATURE_COLUMNS).to_numpy()  # noqa: N806
+    x_test = test_features.select(XGBOOST_FEATURE_COLUMNS).to_numpy()
     y_test = test_features["value"].to_numpy()
-
-    # Train model
     model = XGBRegressor(
         n_estimators=XGBOOST_N_ESTIMATORS,
         learning_rate=XGBOOST_LEARNING_RATE,
         max_depth=XGBOOST_MAX_DEPTH,
         random_state=XGBOOST_RANDOM_STATE,
     )
-    model.fit(X_train, y_train)
+    model.fit(x_train, y_train)
+    mae: float = mean_absolute_error(y_test, model.predict(x_test))
+    return mae, model
 
-    # Predict and evaluate
-    y_pred = model.predict(X_test)
-    mae: float = mean_absolute_error(y_test, y_pred)
-    logging.info("XGBoost training complete")
+
+def train_lightgbm(
+    train_df: pl.DataFrame, test_df: pl.DataFrame
+) -> tuple[float, LGBMRegressor]:
+    """Fit LightGBM on the same features XGBoost uses. Clean A/B comparison.
+
+    LightGBM uses histogram-based splits + leaf-wise growth; on tabular
+    data with limited features it often edges out XGBoost by a few %.
+    Same hyperparams modulo defaults, so the win/loss reflects the algo,
+    not tuning.
+    """
+    logging.info("Training LightGBM model...")
+    train_features, test_features = _featurize(train_df, test_df)
+    x_train = train_features.select(XGBOOST_FEATURE_COLUMNS).to_numpy()
+    y_train = train_features["value"].to_numpy()
+    x_test = test_features.select(XGBOOST_FEATURE_COLUMNS).to_numpy()
+    y_test = test_features["value"].to_numpy()
+    model = LGBMRegressor(
+        n_estimators=LIGHTGBM_N_ESTIMATORS,
+        learning_rate=LIGHTGBM_LEARNING_RATE,
+        max_depth=LIGHTGBM_MAX_DEPTH,
+        random_state=LIGHTGBM_RANDOM_STATE,
+        verbose=-1,
+    )
+    model.fit(x_train, y_train)
+    mae: float = mean_absolute_error(y_test, model.predict(x_test))
     return mae, model
 
 
 def calculate_baseline_mae(test_df: pl.DataFrame) -> float:
-    """Calculate baseline model MAE (mean prediction).
-
-    Args:
-        test_df: Test DataFrame
-
-    Returns:
-        Baseline MAE
-    """
+    """Naive baseline: predict mean of holdout. Floor any real model must beat."""
     y_true = test_df["value"].to_numpy()
-    y_pred = y_true.mean()
-
-    mae: float = mean_absolute_error(y_true, [y_pred] * len(y_true))
-    return mae
+    return float(mean_absolute_error(y_true, [y_true.mean()] * len(y_true)))
 
 
 def get_model_mae(
-    model: PredictiveModels, prophet_mae: float, xgboost_mae: float
+    model: PredictiveModels,
+    prophet_mae: float,
+    xgboost_mae: float,
+    lightgbm_mae: float,
 ) -> float:
-    """Get MAE for a specific model.
-
-    Args:
-        model: Model type
-        prophet_mae: Prophet model MAE
-        xgboost_mae: XGBoost model MAE
-
-    Returns:
-        MAE for the specified model
-    """
-    model_maes = {
+    """Lookup MAE for a model name."""
+    return {
         PredictiveModels.PROPHET: prophet_mae,
         PredictiveModels.XGBOOST: xgboost_mae,
-    }
-    return model_maes[model]
+        PredictiveModels.LIGHTGBM: lightgbm_mae,
+    }[model]
 
 
-def _get_challenger_and_mae(
-    prophet_mae: float, xgboost_mae: float
+def _best_challenger(
+    prophet_mae: float, xgboost_mae: float, lightgbm_mae: float
 ) -> tuple[PredictiveModels, float]:
-    """Determine best challenger model and its MAE.
-
-    Args:
-        prophet_mae: Prophet model MAE
-        xgboost_mae: XGBoost model MAE
-
-    Returns:
-        Tuple of (challenger_model, challenger_mae)
-    """
-    challenger = (
-        PredictiveModels.PROPHET
-        if prophet_mae < xgboost_mae
-        else PredictiveModels.XGBOOST
-    )
-    challenger_mae = get_model_mae(challenger, prophet_mae, xgboost_mae)
-    return challenger, challenger_mae
+    """Return the model+MAE with the lowest MAE across all challengers."""
+    pairs: list[tuple[PredictiveModels, float]] = [
+        (PredictiveModels.PROPHET, prophet_mae),
+        (PredictiveModels.XGBOOST, xgboost_mae),
+        (PredictiveModels.LIGHTGBM, lightgbm_mae),
+    ]
+    return min(pairs, key=lambda p: p[1])
 
 
 def select_champion(
     prophet_mae: float,
     xgboost_mae: float,
-    baseline_mae: float,
+    lightgbm_mae: float,
     current_champion: PredictiveModels | None = None,
 ) -> PredictiveModels:
-    """Select champion model using champion/challenger/baseline pattern.
+    """Promote whichever challenger beats the current champion.
 
-    Logic from readme.md:
-    - if challenger > champion: deploy challenger
-    - elif baseline > champion: alert and deploy baseline
-    - else: keep champion
-
-    Args:
-        prophet_mae: Prophet model MAE
-        xgboost_mae: XGBoost model MAE
-        baseline_mae: Baseline model MAE
-        current_champion: Current champion model (None if first run)
-
-    Returns:
-        Champion model to deploy
+    - First run: deploy best challenger.
+    - Subsequent: if best challenger beats current champion, promote.
+    - Baseline-vs-champion degradation is checked separately in
+      train_models (logs + surfaces via /metrics for Grafana to alert).
     """
-    # Determine best challenger (Prophet vs XGBoost)
-    challenger, challenger_mae = _get_challenger_and_mae(prophet_mae, xgboost_mae)
-
-    # If no current champion, deploy challenger
+    challenger, challenger_mae = _best_challenger(
+        prophet_mae, xgboost_mae, lightgbm_mae
+    )
     if current_champion is None:
         return challenger
-
-    # Get current champion MAE
-    champion_mae = get_model_mae(current_champion, prophet_mae, xgboost_mae)
-
-    # Champion/challenger/baseline logic
+    champion_mae = get_model_mae(
+        current_champion, prophet_mae, xgboost_mae, lightgbm_mae
+    )
     if challenger_mae < champion_mae:
-        # Challenger is better, deploy it
         return challenger
-    elif baseline_mae < champion_mae:
-        # Baseline is better than champion - system degrading!
-        # Alert is sent via push_model_metrics() in train_models()
-        # Keep champion (don't regress to baseline)
-        return current_champion
-    else:
-        # Champion is still best, keep it
-        return current_champion
+    return current_champion
 
 
 def train_models(
     config: Config, current_champion: PredictiveModels | None = None
 ) -> TrainingResult:
-    """Train models and select champion.
-
-    Args:
-        config: Configuration object
-        current_champion: Current champion model (None if first run)
-
-    Returns:
-        Training result with MAE and champion
-    """
-    # Load and split data
+    """Train Prophet + XGBoost + LightGBM, pick champion, log degradation."""
     df = load_timeseries_data(config)
     train_df, test_df = split_train_test(df)
-
-    # Train models
     prophet_mae, prophet_model = train_prophet(train_df, test_df, config)
     xgboost_mae, xgboost_model = train_xgboost(train_df, test_df)
+    lightgbm_mae, lightgbm_model = train_lightgbm(train_df, test_df)
     baseline_mae = calculate_baseline_mae(test_df)
-
-    # Log if baseline beat champion — alerting is downstream of the
-    # embedded /metrics endpoint (see src/metrics.py), so this is purely
-    # operator-visibility logging.
     if current_champion is not None:
-        champion_mae = get_model_mae(current_champion, prophet_mae, xgboost_mae)
+        champion_mae = get_model_mae(
+            current_champion, prophet_mae, xgboost_mae, lightgbm_mae
+        )
         if baseline_mae < champion_mae:
-            import logging
-
             logging.info(
-                "System degradation detected! Baseline MAE (%.2f) < "
-                "Champion MAE (%.2f).",
+                "System degradation: baseline %.2f < champion %.2f",
                 baseline_mae,
                 champion_mae,
             )
-
-    # Select champion
     champion = select_champion(
-        prophet_mae, xgboost_mae, baseline_mae, current_champion=current_champion
+        prophet_mae,
+        xgboost_mae,
+        lightgbm_mae,
+        current_champion=current_champion,
     )
-
     return TrainingResult(
         prophet_mae=prophet_mae,
         xgboost_mae=xgboost_mae,
+        lightgbm_mae=lightgbm_mae,
         baseline_mae=baseline_mae,
         champion=champion,
         prophet_model=prophet_model,
         xgboost_model=xgboost_model,
+        lightgbm_model=lightgbm_model,
     )
