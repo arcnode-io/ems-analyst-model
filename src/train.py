@@ -51,12 +51,44 @@ class TrainingResult(BaseModel):
 
 
 def load_timeseries_data(_config: Config) -> pl.DataFrame:
-    """Load timeseries data from Postgres."""
-    with psycopg2.connect(os.environ["TIMESERIES_URL"]) as conn:
-        df = pl.read_database(
-            "SELECT ts, value FROM timeseries_data ORDER BY ts", connection=conn
+    """Load SPP target joined with day-ahead load forecast feature.
+
+    The leakage guard `publish_time_utc <= interval_start_utc - 24h`
+    keeps the load forecast realistic — only use forecasts that were
+    actually available 24 hours before the target hour (DAM clearing
+    horizon). `DISTINCT ON` picks the latest such publish per hour.
+
+    LEFT JOIN tolerates missing forecast rows (first call before the
+    load_forecasts_raw ETL has caught up); affected rows get
+    `load_forecast_mw=NULL` and are dropped before training.
+    """
+    # Scope the load-forecast slice to the last 60 days so stale partial
+    # backfills (from earlier ETL runs that only covered tiny windows
+    # before the lookback narrowed) don't pollute the join. Outside that
+    # window timeseries_data still trains on time + lag features alone
+    # via the LEFT JOIN + null-drop in _featurize.
+    sql = """
+        WITH leakage_safe AS (
+            SELECT DISTINCT ON (interval_start_utc)
+                   interval_start_utc AS ts,
+                   load_mw
+            FROM load_forecasts_raw
+            WHERE interval_start_utc >= NOW() - INTERVAL '60 days'
+              AND publish_time_utc <= interval_start_utc - INTERVAL '24 hours'
+            ORDER BY interval_start_utc, publish_time_utc DESC
         )
-    return df
+        SELECT t.ts, t.value, l.load_mw AS load_forecast_mw
+        FROM timeseries_data t
+        LEFT JOIN leakage_safe l ON l.ts = t.ts
+        ORDER BY t.ts
+    """
+    with psycopg2.connect(os.environ["TIMESERIES_URL"]) as conn:
+        # infer_schema_length=None → scan all rows to figure out dtypes.
+        # The LEFT JOIN's load_forecast_mw column has long all-null
+        # stretches (historical hours before the load-forecast ETL
+        # window) — without this polars infers Null type and chokes
+        # when it eventually sees a float.
+        return pl.read_database(sql, connection=conn, infer_schema_length=None)
 
 
 def split_train_test(
@@ -120,14 +152,18 @@ def create_xgboost_features(df: pl.DataFrame) -> pl.DataFrame:
 def _featurize(
     train_df: pl.DataFrame, test_df: pl.DataFrame
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Add features to both splits + drop NaN-lag rows from train head.
+    """Add features to both splits + drop rows missing any feature.
 
     The test set's lags are filled because the lag values come from the
     train tail (we featurize on the concatenated set then re-split on
-    timestamp).
+    timestamp). Rows missing the load forecast feature (LEFT JOIN
+    misses, e.g. before the load_forecasts_raw ETL caught up to that
+    historical hour) are dropped from both splits.
     """
     full = pl.concat([train_df, test_df]).sort("ts")
-    full_feat = create_xgboost_features(full).drop_nulls(subset=["value_lag_168h"])
+    full_feat = create_xgboost_features(full).drop_nulls(
+        subset=["value_lag_168h", "load_forecast_mw"]
+    )
     train_max_ts = train_df["ts"].max()
     train_feat = full_feat.filter(pl.col("ts") <= train_max_ts)
     test_feat = full_feat.filter(pl.col("ts") > train_max_ts)

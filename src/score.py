@@ -89,29 +89,59 @@ def _load_history_for_lags() -> pl.DataFrame:
     """
     with _connect() as conn:
         return pl.read_database(
-            "SELECT ts, value FROM timeseries_data " "ORDER BY ts DESC LIMIT 200",
+            "SELECT ts, value FROM timeseries_data ORDER BY ts DESC LIMIT 200",
             connection=conn,
         ).sort("ts")
+
+
+def _load_forecast_for_future(future_ts: list[datetime]) -> dict[datetime, float]:
+    """Latest available load forecast per future ts.
+
+    No leakage guard here — for predicting future hours we want the
+    freshest forecast ERCOT has published. Returns a dict keyed on ts.
+    """
+    if not future_ts:
+        return {}
+    start = min(future_ts)
+    end = max(future_ts)
+    sql = """
+        SELECT DISTINCT ON (interval_start_utc)
+               interval_start_utc AS ts, load_mw
+        FROM load_forecasts_raw
+        WHERE interval_start_utc BETWEEN %s AND %s
+        ORDER BY interval_start_utc, publish_time_utc DESC
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (start, end))
+        rows = cur.fetchall()
+    return {row[0]: float(row[1]) for row in rows}
 
 
 def _score_tree(
     model: XGBRegressor | LGBMRegressor,
     future_ts: list[datetime],
     history: pl.DataFrame,
+    load_forecast: dict[datetime, float],
 ) -> list[float]:
-    """Predict tree model on time + lagged-value features.
+    """Predict tree model on time + lag + load-forecast features.
 
-    Builds feature rows by joining each future_ts to its lag values
-    from `history` (the most recent actuals). Falls back to the most
-    recent available actual if exact-ts lookup misses (won't happen
-    with hourly data + a fresh ETL run, but defensive).
+    Per-future_ts feature lookup:
+    - lag_24h, lag_168h: from `history` (actuals from timeseries_data).
+    - load_forecast_mw: from `load_forecast` (latest publish per ts in
+      load_forecasts_raw).
+    Fallbacks: most recent actual for lags, mean of available forecasts
+    for missing load forecast values.
     """
     rows: list[dict[str, float | int | datetime]] = []
     hist_by_ts = {row["ts"]: row["value"] for row in history.iter_rows(named=True)}
     most_recent_value = history["value"][-1] if not history.is_empty() else 0.0
+    load_fallback = (
+        sum(load_forecast.values()) / len(load_forecast) if load_forecast else 0.0
+    )
     for ts in future_ts:
         lag_24 = hist_by_ts.get(ts - timedelta(hours=24), most_recent_value)
         lag_168 = hist_by_ts.get(ts - timedelta(hours=168), most_recent_value)
+        load_mw = load_forecast.get(ts, load_fallback)
         rows.append(
             {
                 "ts": ts,
@@ -124,6 +154,7 @@ def _score_tree(
                 "weekofyear": int(ts.isocalendar()[1]),
                 "value_lag_24h": float(lag_24),
                 "value_lag_168h": float(lag_168),
+                "load_forecast_mw": float(load_mw),
             }
         )
     feat_df = pl.DataFrame(rows)
@@ -143,11 +174,17 @@ def score(config: Config, result: TrainingResult) -> pl.DataFrame:
             values = _score_prophet(result.prophet_model, future_ts)
         case PredictiveModels.XGBOOST:
             values = _score_tree(
-                result.xgboost_model, future_ts, _load_history_for_lags()
+                result.xgboost_model,
+                future_ts,
+                _load_history_for_lags(),
+                _load_forecast_for_future(future_ts),
             )
         case PredictiveModels.LIGHTGBM:
             values = _score_tree(
-                result.lightgbm_model, future_ts, _load_history_for_lags()
+                result.lightgbm_model,
+                future_ts,
+                _load_history_for_lags(),
+                _load_forecast_for_future(future_ts),
             )
     return pl.DataFrame({"forecast_for": future_ts, "value": values})
 

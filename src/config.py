@@ -32,6 +32,11 @@ class Config(BaseModel):  # noqa: D101
     forecast_measurement: str
     forecast_unit: str
     forecast_horizon_hours: int
+    # ERCOT load-forecast feature wiring. zone matches one of the
+    # column names in ercot_load_forecast_by_forecast_zone
+    # (north|south|west|houston|system_total).
+    load_forecast_dataset: str
+    load_forecast_zone: str
 
 
 class _ConfigMap(BaseModel):

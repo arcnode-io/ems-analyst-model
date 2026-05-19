@@ -94,6 +94,9 @@ LIGHTGBM_RANDOM_STATE: Final[int] = 42
 # Tree-model feature columns — same set XGBoost + LightGBM use.
 # Lags added 2026-05-19: same hour yesterday (24h) + last week (168h)
 # often help autoregressive structure that pure time features miss.
+# Load forecast added 2026-05-19: ERCOT day-ahead north-zone load
+# forecast — biggest known LMP driver, gridstatus dataset
+# ercot_load_forecast_by_forecast_zone.
 XGBOOST_FEATURE_COLUMNS: Final[list[str]] = [
     "hour",
     "day",
@@ -104,6 +107,7 @@ XGBOOST_FEATURE_COLUMNS: Final[list[str]] = [
     "weekofyear",
     "value_lag_24h",
     "value_lag_168h",
+    "load_forecast_mw",
 ]
 
 # Hours of history required before any training row has its full lag

@@ -21,33 +21,31 @@ from tests.fixtures.containers import start_mlflow, start_postgres
 
 
 def create_timeseries_table(timeseries_url: str) -> psycopg2.extensions.connection:
-    """Create timeseries_data table and return connection.
-
-    Args:
-        timeseries_url: PostgreSQL connection string
-
-    Returns:
-        Database connection (caller must close)
-    """
+    """Create timeseries_data + load_forecasts_raw tables and return connection."""
     conn = psycopg2.connect(timeseries_url)
     cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE timeseries_data (
-            ts TIMESTAMPTZ PRIMARY KEY,
-            value DOUBLE PRECISION NOT NULL
-        )
-        """)
+    cursor.execute(
+        "CREATE TABLE timeseries_data "
+        "(ts TIMESTAMPTZ PRIMARY KEY, value DOUBLE PRECISION NOT NULL)"
+    )
+    cursor.execute(
+        "CREATE TABLE load_forecasts_raw ("
+        " interval_start_utc TIMESTAMPTZ NOT NULL,"
+        " publish_time_utc   TIMESTAMPTZ NOT NULL,"
+        " load_mw            DOUBLE PRECISION NOT NULL,"
+        " PRIMARY KEY (interval_start_utc, publish_time_utc))"
+    )
     cursor.close()
     return conn
 
 
 def seed_trending_data(conn: psycopg2.extensions.connection, days: int = 60) -> None:
-    """Seed deterministic trending hourly data.
+    """Seed hourly SPP + matching leakage-safe load-forecast rows.
 
-    Real ETL produces hourly DAM SPP rows. Tree-model lag features
-    (`value_lag_24h`, `value_lag_168h`) need at least 168 hourly rows
-    to populate, so 60 daily rows wouldn't work. 60 days * 24h = 1440
-    rows is comfortably above the lag horizon.
+    For each SPP hour H, insert a load-forecast row with publish_time_utc
+    = H - 25h (satisfies the `<= H - 24h` leakage guard in
+    `load_timeseries_data`). Load value mirrors the SPP value with an
+    offset so the model has a correlated signal to learn.
     """
     cursor = conn.cursor()
     now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
@@ -56,26 +54,36 @@ def seed_trending_data(conn: psycopg2.extensions.connection, days: int = 60) -> 
         ts = now - timedelta(hours=total_hours - i)
         value = 50000 + (i * 5)
         cursor.execute(
-            "INSERT INTO timeseries_data (ts, value) VALUES (%s, %s)",
-            (ts, value),
+            "INSERT INTO timeseries_data (ts, value) VALUES (%s, %s)", (ts, value)
+        )
+        publish = ts - timedelta(hours=25)
+        load_mw = 30000 + (i * 3)
+        cursor.execute(
+            "INSERT INTO load_forecasts_raw "
+            "(interval_start_utc, publish_time_utc, load_mw) VALUES (%s, %s, %s)",
+            (ts, publish, load_mw),
         )
     conn.commit()
     cursor.close()
 
 
 @contextmanager
-def mock_api(dataset: str) -> Generator[None]:
-    """Mock gridstatus.io REST + enable network for testcontainers.
+def mock_api(
+    dataset: str, load_forecast_dataset: str = "ercot_load_forecast_by_forecast_zone"
+) -> Generator[None]:
+    """Mock both gridstatus datasets the pipeline pulls.
 
-    Shape: JSON `array-of-arrays` — data[0]=column headers, data[1:]=rows.
+    Two endpoints to stub:
+    - SPP dataset (`dataset`) — returns one HB_NORTH row.
+    - load_forecast dataset — returns one row with all four zone
+      columns so process.py's column selector finds `north`.
+
+    Shape: JSON `array-of-arrays` — data[0]=headers, data[1:]=rows.
     `meta.hasNextPage=False` so the pager stops after one fetch.
-
-    Args:
-        dataset: gridstatus dataset name (e.g. "ercot_spp_day_ahead_hourly")
     """
     os.environ.setdefault("GRIDSTATUS_API_KEY", "test-key-not-real")
     ts_now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
-    payload = {
+    spp_payload = {
         "data": [
             [
                 "interval_start_utc",
@@ -89,9 +97,29 @@ def mock_api(dataset: str) -> Generator[None]:
         ],
         "meta": {"hasNextPage": False, "cursor": None},
     }
+    publish_ts = (datetime.now(UTC) - timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%S")
+    load_payload = {
+        "data": [
+            [
+                "interval_start_utc",
+                "interval_end_utc",
+                "publish_time_utc",
+                "north",
+                "south",
+                "west",
+                "houston",
+                "system_total",
+            ],
+            [ts_now, ts_now, publish_ts, 32000.0, 28000.0, 18000.0, 15000.0, 93000.0],
+        ],
+        "meta": {"hasNextPage": False, "cursor": None},
+    }
     pook.get(f"https://api.gridstatus.io/v1/datasets/{dataset}/query").persist().reply(
         200
-    ).json(payload)
+    ).json(spp_payload)
+    pook.get(
+        f"https://api.gridstatus.io/v1/datasets/{load_forecast_dataset}/query"
+    ).persist().reply(200).json(load_payload)
     pook.enable_network("localhost", "127.0.0.1")
     pook.on()
     try:

@@ -1,6 +1,7 @@
 """Unit tests for score helpers — future-hours generator + model dispatch."""
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pandas as pd
 import polars as pl
@@ -64,9 +65,19 @@ def test_score_prophet_returns_one_value_per_timestamp() -> None:
 
 
 def _build_history(start: datetime, hours: int = 200) -> pl.DataFrame:
-    """Synthetic hourly history with enough rows for 168h lag features."""
+    """Synthetic hourly history with enough rows for 168h lag features.
+
+    Includes a `load_forecast_mw` column populated with a constant
+    placeholder — real ETL would join from `load_forecasts_raw`.
+    """
     ts = [start + timedelta(hours=i) for i in range(hours)]
-    return pl.DataFrame({"ts": ts, "value": [float(i) for i in range(hours)]})
+    return pl.DataFrame(
+        {
+            "ts": ts,
+            "value": [float(i) for i in range(hours)],
+            "load_forecast_mw": [10000.0 + float(i) for i in range(hours)],
+        }
+    )
 
 
 def _train_tree(model_kind: str, history: pl.DataFrame) -> object:
@@ -74,7 +85,9 @@ def _train_tree(model_kind: str, history: pl.DataFrame) -> object:
     from src.models import XGBOOST_FEATURE_COLUMNS
     from src.train import create_xgboost_features
 
-    feat = create_xgboost_features(history).drop_nulls(subset=["value_lag_168h"])
+    feat = create_xgboost_features(history).drop_nulls(
+        subset=["value_lag_168h", "load_forecast_mw"]
+    )
     x = feat.select(XGBOOST_FEATURE_COLUMNS).to_numpy()
     y = feat["value"].to_numpy()
     if model_kind == "xgboost":
@@ -88,22 +101,26 @@ def _train_tree(model_kind: str, history: pl.DataFrame) -> object:
 
 
 def test_score_tree_xgboost_returns_one_value_per_timestamp() -> None:
-    """XGBoost predicts N future hours from time + lag features."""
+    """XGBoost predicts N future hours from time + lag + load-forecast features."""
     start = datetime(2024, 1, 1, tzinfo=UTC)
     history = _build_history(start)
-    model = _train_tree("xgboost", history)
+    model = cast(XGBRegressor, _train_tree("xgboost", history))
     future = [start + timedelta(hours=200 + i) for i in range(3)]
-    actual = _score_tree(model, future, history)  # ty: ignore[invalid-argument-type]
+    load_forecast = {ts: 10500.0 for ts in future}
+    actual = _score_tree(model, future, history, load_forecast)
     assert len(actual) == 3
     assert all(isinstance(v, float) for v in actual)
 
 
 def test_score_tree_lightgbm_returns_one_value_per_timestamp() -> None:
-    """LightGBM predicts N future hours from time + lag features."""
+    """LightGBM predicts N future hours from time + lag + load-forecast features."""
+    from lightgbm import LGBMRegressor
+
     start = datetime(2024, 1, 1, tzinfo=UTC)
     history = _build_history(start)
-    model = _train_tree("lightgbm", history)
+    model = cast(LGBMRegressor, _train_tree("lightgbm", history))
     future = [start + timedelta(hours=200 + i) for i in range(3)]
-    actual = _score_tree(model, future, history)  # ty: ignore[invalid-argument-type]
+    load_forecast = {ts: 10500.0 for ts in future}
+    actual = _score_tree(model, future, history, load_forecast)
     assert len(actual) == 3
     assert all(isinstance(v, float) for v in actual)

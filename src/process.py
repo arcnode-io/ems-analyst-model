@@ -130,8 +130,8 @@ def extract(config: Config) -> pl.DataFrame:
 
 def _fetch_dataset(
     dataset: str,
-    filter_column: str,
-    filter_value: str,
+    filter_column: str | None,
+    filter_value: str | None,
     start: datetime,
     end: datetime,
 ) -> pl.DataFrame:
@@ -139,6 +139,8 @@ def _fetch_dataset(
 
     Paces requests at 1.1s/each to stay clear of the free-tier 1-req/sec
     limit. On 429, sleeps the gridstatus-suggested wait then retries.
+    `filter_column` + `filter_value` are optional — drop them entirely
+    for system-wide datasets (load forecast, etc).
     """
     headers = {"x-api-key": os.environ["GRIDSTATUS_API_KEY"]}
     url = f"{_GRIDSTATUS_BASE}/datasets/{dataset}/query"
@@ -153,14 +155,15 @@ def _fetch_dataset(
             params: dict[str, Any] = {
                 "start_time": start.strftime("%Y-%m-%dT%H:%M:%S"),
                 "end_time": end.strftime("%Y-%m-%dT%H:%M:%S"),
-                "filter_column": filter_column,
-                "filter_value": filter_value,
                 # No `limit` — gridstatus treats it as a hard total cap.
                 # JSON+array-of-arrays so we can read meta.cursor for
                 # pagination (CSV omits cursor info entirely).
                 "return_format": "json",
                 "json_schema": "array-of-arrays",
             }
+            if filter_column and filter_value:
+                params["filter_column"] = filter_column
+                params["filter_value"] = filter_value
             if cursor:
                 params["cursor"] = cursor
             log.info(
@@ -175,7 +178,13 @@ def _fetch_dataset(
             data = payload.get("data", [])
             if len(data) > 1:
                 cols, rows = data[0], data[1:]
-                page_df = pl.DataFrame(rows, schema=cols, orient="row")
+                # infer_schema_length=None → look at all rows. Without
+                # this, a column whose first ~100 rows are null gets
+                # inferred as Null type, then real floats below fail
+                # to append (ComputeError on mixed-null float cols).
+                page_df = pl.DataFrame(
+                    rows, schema=cols, orient="row", infer_schema_length=None
+                )
                 log.info("📥 page %d: %d rows", page, page_df.height)
                 frames.append(page_df)
             if not cursor:
@@ -305,8 +314,152 @@ def load(df: TimeseriesData, _config: Config) -> None:
     log.info("💾 loaded %d rows into timeseries_data via COPY", df.height)
 
 
+_LOAD_FORECAST_DDL: Final[str] = """
+    CREATE TABLE IF NOT EXISTS load_forecasts_raw (
+        interval_start_utc TIMESTAMPTZ NOT NULL,
+        publish_time_utc   TIMESTAMPTZ NOT NULL,
+        load_mw            DOUBLE PRECISION NOT NULL,
+        PRIMARY KEY (interval_start_utc, publish_time_utc)
+    )
+"""
+
+
+def _ensure_load_forecasts_table() -> None:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_LOAD_FORECAST_DDL)
+        conn.commit()
+
+
+def _latest_load_forecast_publish() -> datetime | None:
+    """Most-recent publish_time_utc already stored (None if empty)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT MAX(publish_time_utc) FROM load_forecasts_raw")
+        row = cur.fetchone()
+    return row[0] if row and row[0] else None
+
+
+_LOAD_FORECAST_LOOKBACK_DAYS: Final[int] = 60
+_LOAD_FORECAST_LOOKAHEAD_DAYS: Final[int] = 7
+# gridstatus caps a single query at ~50k rows + hasNextPage=False.
+# Load forecast publishes ~24 rows/hour (one publish/hour for each of
+# 168 forecast horizons) → 50k / 24 ≈ 87 hours ≈ 3.5 days. Use a
+# 3-day chunk to stay safely under the cap.
+_LOAD_FORECAST_CHUNK_DAYS: Final[int] = 3
+
+
+def _process_load_forecast(config: Config) -> None:
+    """Pull ERCOT load forecast for the configured zone -> load_forecasts_raw.
+
+    Scope: last 60 days + next 7 days. Pulled in 3-day chunks because
+    gridstatus' load-forecast dataset hits the 50k-row page cap at
+    ~3.5 days per query (no working cursor for this dataset).
+    UPSERT on (interval_start_utc, publish_time_utc) is idempotent
+    across chunk overlaps + re-runs.
+
+    LEAKAGE NOTE: training applies the strict `<= ts - 24h` filter at
+    SELECT time in `train.load_timeseries_data`. Mid-day same-day
+    publishes in this raw table are filtered there.
+    """
+    _ensure_load_forecasts_table()
+    now = datetime.now(UTC)
+    window_start = now - timedelta(days=_LOAD_FORECAST_LOOKBACK_DAYS)
+    window_end = now + timedelta(days=_LOAD_FORECAST_LOOKAHEAD_DAYS)
+    log.info(
+        "🔄 load-forecast pull window %s -> %s (3-day chunks)",
+        window_start.date(),
+        window_end.date(),
+    )
+    total = 0
+    chunk_start = window_start
+    while chunk_start < window_end:
+        chunk_end = min(
+            chunk_start + timedelta(days=_LOAD_FORECAST_CHUNK_DAYS), window_end
+        )
+        try:
+            raw = _fetch_dataset(
+                dataset=config.load_forecast_dataset,
+                filter_column=None,
+                filter_value=None,
+                start=chunk_start,
+                end=chunk_end,
+            )
+        except httpx.HTTPStatusError as e:
+            # 403 = daily quota; 4xx = client cap; bail rather than
+            # block the rest of the pipeline. Training proceeds on
+            # whatever forecast rows were loaded before the cap.
+            log.warning(
+                "load-forecast chunk %s -> %s failed: %s — skipping remainder",
+                chunk_start.date(),
+                chunk_end.date(),
+                e,
+            )
+            break
+        chunk_start = chunk_end
+        if raw.is_empty():
+            continue
+        zone_col = config.load_forecast_zone
+        if zone_col not in raw.columns:
+            raise ValueError(
+                f"load_forecast_zone {zone_col!r} not in dataset "
+                f"columns {raw.columns!r}"
+            )
+        clean = (
+            raw.select(
+                pl.col("interval_start_utc")
+                .str.to_datetime(time_zone="UTC")
+                .alias("interval_start_utc"),
+                pl.col("publish_time_utc")
+                .str.to_datetime(time_zone="UTC")
+                .alias("publish_time_utc"),
+                pl.col(zone_col).cast(pl.Float64).alias("load_mw"),
+            )
+            .drop_nulls()
+            .unique(subset=["interval_start_utc", "publish_time_utc"])
+        )
+        if clean.is_empty():
+            continue
+        _load_forecast_rows(clean)
+        total += clean.height
+    log.info("💾 loaded %d total load-forecast rows", total)
+
+
+def _load_forecast_rows(df: pl.DataFrame) -> None:
+    """COPY+temp+UPSERT — same pattern as the SPP `load` function."""
+    buf = io.StringIO()
+    for row in df.iter_rows(named=True):
+        buf.write(
+            f"{row['interval_start_utc'].isoformat()}\t"
+            f"{row['publish_time_utc'].isoformat()}\t"
+            f"{row['load_mw']}\n"
+        )
+    buf.seek(0)
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "CREATE TEMP TABLE _lf_stage "
+            "(interval_start_utc TIMESTAMPTZ, publish_time_utc TIMESTAMPTZ, "
+            "load_mw DOUBLE PRECISION) ON COMMIT DROP"
+        )
+        cur.copy_from(
+            buf,
+            "_lf_stage",
+            sep="\t",
+            columns=("interval_start_utc", "publish_time_utc", "load_mw"),
+        )
+        cur.execute(
+            "INSERT INTO load_forecasts_raw "
+            "(interval_start_utc, publish_time_utc, load_mw) "
+            "SELECT DISTINCT ON (interval_start_utc, publish_time_utc) "
+            "  interval_start_utc, publish_time_utc, load_mw "
+            "FROM _lf_stage "
+            "ORDER BY interval_start_utc, publish_time_utc "
+            "ON CONFLICT (interval_start_utc, publish_time_utc) "
+            "DO UPDATE SET load_mw = EXCLUDED.load_mw"
+        )
+        conn.commit()
+
+
 def process(config: Config) -> None:
-    """Execute ETL: extract → transform → load."""
+    """Execute ETL: SPP target + load forecast feature → Postgres."""
     log.info(
         "🌐 ETL start — dataset=%s location=%s",
         config.gridstatus_dataset,
@@ -322,4 +475,10 @@ def process(config: Config) -> None:
             clean["ts"].max(),
         )
     load(clean, config)
+    log.info(
+        "🌐 load-forecast ETL — dataset=%s zone=%s",
+        config.load_forecast_dataset,
+        config.load_forecast_zone,
+    )
+    _process_load_forecast(config)
     log.info("✅ ETL done")
