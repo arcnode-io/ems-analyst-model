@@ -17,7 +17,7 @@ from prometheus_client.parser import text_string_to_metric_families
 from src.app import app
 from src.config import load_config
 from src.models import PredictiveModels
-from tests.fixtures.containers import start_mlflow, start_postgres, start_pushgateway
+from tests.fixtures.containers import start_mlflow, start_postgres
 
 
 def create_timeseries_table(timeseries_url: str) -> psycopg2.extensions.connection:
@@ -56,31 +56,6 @@ def seed_trending_data(conn: psycopg2.extensions.connection, days: int = 60) -> 
         cursor.execute(
             "INSERT INTO timeseries_data (ts, value) VALUES (%s, %s)",
             (ts, value),
-        )
-    conn.commit()
-    cursor.close()
-
-
-def seed_random_data(conn: psycopg2.extensions.connection, days: int = 60) -> None:
-    """Seed database with random data (causes model degradation).
-
-    Random data = high MAE for models, low MAE for baseline (mean).
-
-    Args:
-        conn: Database connection
-        days: Number of days of data to generate
-    """
-    import random
-
-    cursor = conn.cursor()
-    now = datetime.now(UTC)
-    random.seed(42)
-    values = [random.uniform(45000, 55000) for _ in range(days)]  # noqa: S311
-    for i in range(days):
-        ts = now - timedelta(days=days - i)
-        cursor.execute(
-            "INSERT INTO timeseries_data (ts, value) VALUES (%s, %s)",
-            (ts, values[i]),
         )
     conn.commit()
     cursor.close()
@@ -239,56 +214,62 @@ class TestIntegration:
             finally:
                 verify_conn.close()
 
-    def test_pushes_metrics_via_prometheus(self) -> None:
-        """Test that MAE metrics are pushed to Prometheus Pushgateway on degradation.
+    def test_metrics_endpoint_scrapable_after_run(self) -> None:
+        """Embedded /metrics serves gauges after run_pipeline updates them.
 
-        Integration test: Run app with data causing degradation (baseline > champion),
-        verify push_model_metrics sends metrics to Pushgateway.
+        Simulates the real prod path: `start_metrics_server` binds a port,
+        `run_pipeline` runs end-to-end (ETL + train + publish + score),
+        then a Prom-style scrape against `localhost:<port>/metrics`
+        returns the gauge values. Same shape Prom would see in `--mode
+        schedule`.
         """
-        # Arrange
+        from src.app import run_pipeline
+        from src.metrics import start_metrics_server
+
+        # Pick a high free port that won't collide with the local prom default.
+        metrics_port = 19090
         with (
             start_mlflow() as mlflow_c,
             start_postgres(image="timescale/timescaledb:latest-pg15") as pg,
-            start_pushgateway() as pushgateway,
         ):
             test_config = load_config().model_copy(
                 update={
                     "mlflow_tracking_uri": mlflow_c.url,
-                    "mlflow_model_name": "test_degradation_predictor",
+                    "mlflow_model_name": "test_metrics_scrape_predictor",
                     "prophet_daily_seasonality": False,
                     "prophet_yearly_seasonality": False,
-                    "prometheus_pushgateway": f"localhost:{pushgateway.port}",
+                    "metrics_port": metrics_port,
                 }
             )
 
-            # Seed database with random data (triggers degradation)
+            # Seed deterministic trending data so training reliably succeeds.
             os.environ["TIMESERIES_URL"] = pg.url
             conn = create_timeseries_table(pg.url)
             try:
-                seed_random_data(conn)
+                seed_trending_data(conn)
             finally:
                 conn.close()
 
-            # Act - run full pipeline with mocked API (triggers degradation detection)
+            # Act — start the metrics server then run pipeline.
+            start_metrics_server(metrics_port)
             with mock_api(test_config.gridstatus_dataset):
-                # First run trains initial model (no current_champion)
-                app(test_config, mode="once")
+                run_pipeline(test_config)
 
-                # Second run with current_champion set - triggers degradation detection
-                from src.train import train_models
-
-                train_models(test_config, current_champion=PredictiveModels.PROPHET)
-
-            # Assert - verify metrics were pushed to Pushgateway
+            # Assert — scrape the gauge endpoint, expect all 5 gauges present.
             response = requests.get(
-                f"http://localhost:{pushgateway.port}/metrics", timeout=10
+                f"http://localhost:{metrics_port}/metrics", timeout=10
             )
             assert response.status_code == 200
-
             metrics = parse_prometheus_metrics(response.text)
-
-            # Verify degradation metrics are present
-            assert "champion_mae" in metrics
-            assert "challenger_mae" in metrics
-            assert "champion_model" in metrics
-            assert metrics["champion_model"] == 1.0  # PROPHET
+            for name in (
+                "champion_mae",
+                "baseline_mae",
+                "challenger_mae",
+                "champion_model",
+                "model_version",
+            ):
+                assert name in metrics, f"missing gauge {name}"
+            # Champion encoded as 1 (Prophet) or 2 (XGBoost) — both valid.
+            assert metrics["champion_model"] in (1.0, 2.0)
+            # Model version is the just-published one, starts at 1.
+            assert metrics["model_version"] >= 1.0

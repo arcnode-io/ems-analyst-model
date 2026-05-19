@@ -20,7 +20,6 @@ from src.models import (
     XGBOOST_RANDOM_STATE,
     PredictiveModels,
 )
-from src.utils import push_model_metrics
 
 
 class TrainingResult(BaseModel):
@@ -302,27 +301,19 @@ def train_models(
     xgboost_mae, xgboost_model = train_xgboost(train_df, test_df)
     baseline_mae = calculate_baseline_mae(test_df)
 
-    # Determine best challenger
-    _challenger, challenger_mae = _get_challenger_and_mae(prophet_mae, xgboost_mae)
-
-    # Get current champion MAE if exists
+    # Log if baseline beat champion — alerting is downstream of the
+    # embedded /metrics endpoint (see src/metrics.py), so this is purely
+    # operator-visibility logging.
     if current_champion is not None:
         champion_mae = get_model_mae(current_champion, prophet_mae, xgboost_mae)
-
-        # Check if system is degrading (baseline beats champion)
         if baseline_mae < champion_mae:
-            # Send Grafana alert via Prometheus pushgateway
             import logging
 
             logging.info(
-                f"System degradation detected! Baseline MAE ({baseline_mae:.2f}) < "
-                f"Champion MAE ({champion_mae:.2f}). Sending alert to Grafana."
-            )
-            push_model_metrics(
-                config.prometheus_pushgateway,
-                champion_mae=champion_mae,
-                challenger_mae=challenger_mae,
-                champion=current_champion,
+                "System degradation detected! Baseline MAE (%.2f) < "
+                "Champion MAE (%.2f).",
+                baseline_mae,
+                champion_mae,
             )
 
     # Select champion

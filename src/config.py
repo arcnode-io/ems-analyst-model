@@ -22,7 +22,7 @@ class Config(BaseModel):  # noqa: D101
     settlement_point: str
     gridstatus_dataset: str
     backfill_start_date: str  # YYYY-MM-DD, used for first-run historical pull
-    prometheus_pushgateway: str
+    metrics_port: int  # Embedded Prom /metrics port (--mode schedule only)
     mlflow_tracking_uri: str
     mlflow_model_name: str
     schedule_time: str

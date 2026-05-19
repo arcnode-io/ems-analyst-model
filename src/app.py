@@ -10,6 +10,7 @@ from mlflow.tracking.client import MlflowClient
 from mlflow.tracking.fluent import log_metric, log_param, start_run
 
 from src.config import Config
+from src.metrics import start_metrics_server, update_gauges
 from src.models import SCHEDULE_POLL_INTERVAL_SECONDS, PredictiveModels
 from src.process import process
 from src.score import score, write_forecasts
@@ -110,7 +111,12 @@ def run_pipeline(config: Config) -> None:
         # agent + HMI to read via server's REST endpoints.
         logging.info("🔮 scoring champion for next %dh", config.forecast_horizon_hours)
         forecasts_df = score(config, result)
-        write_forecasts(forecasts_df, config, int(version.lstrip("v")))
+        version_int = int(version.lstrip("v"))
+        write_forecasts(forecasts_df, config, version_int)
+
+        # Embedded /metrics gauges — Prom scrapes these directly in --mode
+        # schedule. No pushgateway needed; the daemon process is always-up.
+        update_gauges(result, version_int)
 
         logging.info("🎉 ML pipeline completed successfully")
     except Exception:
@@ -126,6 +132,10 @@ def app(config: Config, mode: str = "once") -> None:
         mode: "once" to run once, "schedule" for daily runs
     """
     if mode == "schedule":
+        # Daemon mode → expose Prom /metrics so the always-up process can
+        # be scraped directly. --mode once skips this (no need to bind a
+        # port for a one-shot CLI run; metrics still land in MLflow).
+        start_metrics_server(config.metrics_port)
         schedule.every().day.at(config.schedule_time).do(run_pipeline, config=config)
         logging.info(f"Scheduler started. Will run daily at {config.schedule_time}")
 

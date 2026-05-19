@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 from testcontainers.core.container import DockerContainer
-from testcontainers.core.wait_strategies import HttpWaitStrategy, LogMessageWaitStrategy
+from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 from testcontainers.postgres import PostgresContainer
 
 
@@ -105,28 +105,6 @@ def start_mlflow() -> Generator[Container]:
 
     with c:
         mapped = int(c.get_exposed_port(5000))
-        yield Container(
-            host="localhost",
-            port=mapped,
-            url=f"http://localhost:{mapped}",
-        )
-
-
-@contextmanager
-def start_pushgateway() -> Generator[Container]:
-    """Start a Prometheus Pushgateway with dynamic port.
-
-    Yields:
-        Container with http:// URL pointing to Pushgateway
-    """
-    c = (
-        DockerContainer("prom/pushgateway:latest")
-        .with_exposed_ports(9091)
-        .waiting_for(HttpWaitStrategy(9091, "/metrics").for_status_code(200))
-    )
-
-    with c:
-        mapped = int(c.get_exposed_port(9091))
         yield Container(
             host="localhost",
             port=mapped,
