@@ -30,28 +30,31 @@ log = logging.getLogger(__name__)
 # come along.
 _STAGE_DDL: Final[str] = """
     CREATE TEMP TABLE _fcast_stage (
-        forecast_for  TIMESTAMPTZ,
-        site_id       TEXT,
-        measurement   TEXT,
-        unit          TEXT,
-        value         DOUBLE PRECISION,
-        model_name    TEXT,
-        model_version INT,
-        forecasted_at TIMESTAMPTZ
+        forecast_for     TIMESTAMPTZ,
+        settlement_point TEXT,
+        measurement      TEXT,
+        unit             TEXT,
+        value            DOUBLE PRECISION,
+        model_name       TEXT,
+        model_version    INT,
+        forecasted_at    TIMESTAMPTZ
     ) ON COMMIT DROP
 """
 
+# Forecasts are keyed by settlement_point — the ERCOT market hub the
+# model predicts. NOT site_id: one hub model serves many customer
+# sites. The server maps a requested site -> its settlement_point.
 _FORECASTS_DDL: Final[str] = """
     CREATE TABLE IF NOT EXISTS forecasts (
-        forecast_for  TIMESTAMPTZ NOT NULL,
-        site_id       TEXT NOT NULL,
-        measurement   TEXT NOT NULL,
-        unit          TEXT NOT NULL,
-        value         DOUBLE PRECISION NOT NULL,
-        model_name    TEXT NOT NULL,
-        model_version INT NOT NULL,
-        forecasted_at TIMESTAMPTZ NOT NULL,
-        PRIMARY KEY (forecast_for, site_id, measurement, model_name)
+        forecast_for     TIMESTAMPTZ NOT NULL,
+        settlement_point TEXT NOT NULL,
+        measurement      TEXT NOT NULL,
+        unit             TEXT NOT NULL,
+        value            DOUBLE PRECISION NOT NULL,
+        model_name       TEXT NOT NULL,
+        model_version    INT NOT NULL,
+        forecasted_at    TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (forecast_for, settlement_point, measurement, model_name)
     )
 """
 
@@ -230,7 +233,7 @@ def write_forecasts(
             sep="\t",
             columns=(
                 "forecast_for",
-                "site_id",
+                "settlement_point",
                 "measurement",
                 "unit",
                 "value",
@@ -241,11 +244,11 @@ def write_forecasts(
         )
         cur.execute(
             "INSERT INTO forecasts "
-            "(forecast_for, site_id, measurement, unit, value, model_name, "
-            " model_version, forecasted_at) "
-            "SELECT forecast_for, site_id, measurement, unit, value, model_name, "
-            "       model_version, forecasted_at FROM _fcast_stage "
-            "ON CONFLICT (forecast_for, site_id, measurement, model_name) "
+            "(forecast_for, settlement_point, measurement, unit, value, "
+            " model_name, model_version, forecasted_at) "
+            "SELECT forecast_for, settlement_point, measurement, unit, value, "
+            "       model_name, model_version, forecasted_at FROM _fcast_stage "
+            "ON CONFLICT (forecast_for, settlement_point, measurement, model_name) "
             "DO UPDATE SET "
             "  value = EXCLUDED.value, "
             "  unit = EXCLUDED.unit, "

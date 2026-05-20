@@ -230,14 +230,14 @@ class TestIntegration:
             try:
                 verify_cur = verify_conn.cursor()
                 verify_cur.execute(
-                    "SELECT COUNT(*), MIN(site_id), MIN(measurement), MIN(unit) "
-                    "FROM forecasts"
+                    "SELECT COUNT(*), MIN(settlement_point), "
+                    "MIN(measurement), MIN(unit) FROM forecasts"
                 )
                 row = verify_cur.fetchone()
                 assert row is not None
-                count, site_id, measurement, unit = row
+                count, settlement_point, measurement, unit = row
                 assert count == test_config.forecast_horizon_hours
-                assert site_id == test_config.settlement_point
+                assert settlement_point == test_config.settlement_point
                 assert measurement == test_config.forecast_measurement
                 assert unit == test_config.forecast_unit
                 verify_cur.close()
