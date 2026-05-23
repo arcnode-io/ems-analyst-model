@@ -282,7 +282,7 @@ None.
 |---|---|
 | ⚡ power-engineer | edp-module-assemblies, edp-api |
 | 🔧 mechanical-engineer | edp-interface-plates |
-| 🏗 platform-engineer | platform-api, ems-iso |
+| 🏗 platform-engineer | platform-api, platform-ems-iso |
 | 🖥️ frontend-engineer | ems-hmi |
 | ⚙️ backend-engineer | ems-device-api |
 | 🏭 ics-engineer | ems-industrial-gateway, ems-industrial-fixtures |
