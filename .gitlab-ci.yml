@@ -29,15 +29,16 @@ build:
     - docker push public.ecr.aws/y1d2j6a8/ems-analyst-model
 
 deploy:
-  # Build-only until June 1: gridstatus tier is 403 on ercot queries, so
-  # running the scheduler now would crash-loop nightly at 02:00 CT.
-  # Image stays fresh; flip to `up -d --build --force-recreate` on the
-  # day the tier opens.
+  # Same loop as ems-analyst: gitlab-runner on the box pulls source,
+  # rebuilds image, force-recreates the scheduler container. Scheduler
+  # is `schedule.every().day.at(02:00 CT)` so a gridstatus 403 (live
+  # until ~2026-06-01) only fails once a day → container restarts via
+  # `restart: unless-stopped` → idle until next 02:00. No tight loop.
   stage: deploy
   only: [main]
   needs: [checks]
   script:
-    - cd /home/admin/arcnode/ems-analyst-model && git pull --ff-only && cd /home/admin/docker/ems-analyst-model && docker compose build
+    - cd /home/admin/arcnode/ems-analyst-model && git pull --ff-only && cd /home/admin/docker/ems-analyst-model && docker compose up -d --build --force-recreate
 
 mirror:
   stage: mirror
