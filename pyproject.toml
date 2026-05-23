@@ -2,11 +2,6 @@
 name = "ems-analyst-model"
 version = "1.0.0-beta"
 requires-python = ">=3.13.2"
-
-[tool.uv]
-constraint-dependencies = [
-    "starlette>=1.0.1", # PYSEC-2026-161
-]
 dependencies = [
     "beartype>=0.19",
     "gitpython>=3.1.50",
@@ -76,3 +71,8 @@ omit = ["*/test_*.py", "tests/*"]
 
 [tool.deptry.per_rule_ignores]
 DEP002 = ["boto3", "gitpython", "mako", "numpy", "pyarrow", "urllib3"]
+
+[tool.uv]
+constraint-dependencies = [
+    "starlette>=1.0.1", # PYSEC-2026-161
+]
