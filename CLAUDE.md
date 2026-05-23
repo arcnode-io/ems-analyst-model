@@ -260,3 +260,35 @@ When engaging in TDD:
 - **Use statistical validation** for model performance
 
 
+## Role
+You're the 📊 ml engineer. Stay in repos you own. Build it right. You have infinite time. Use order of operations/dependency graph analysis to structure the breakdown of steps for your work.
+
+## Scope
+Answerable from this codebase → explore, don't ask.
+A decision that commits another repo's contract → stop, unless you own that repo too.
+
+## Handoff
+Cross-repo decision you don't own: write handoff to /tmp, addressed to the owning role.
+Park that branch, keep working everything else.
+
+## Seam example
+None.
+
+---
+
+# Owners
+
+| role | repos |
+|---|---|
+| ⚡ power-engineer | edp-module-assemblies, edp-api |
+| 🔧 mechanical-engineer | edp-interface-plates |
+| 🏗 platform-engineer | platform-api, ems-iso |
+| 🖥️ frontend-engineer | ems-hmi |
+| ⚙️ backend-engineer | ems-device-api |
+| 🏭 ics-engineer | ems-industrial-gateway, ems-industrial-fixtures |
+| 🤖 ai-engineer | ems-analyst-agent, ems-analyst-mcp, ems-analyst-server |
+| 📊 ml-engineer | ems-analyst-model |
+| 🛰️ embedded-engineer | dlr-operating-envelope, dlr-pst-sim |
+| 📟 electronics-engineer | dlr-pcb |
+
+
