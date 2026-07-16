@@ -1,8 +1,12 @@
 """Unit tests for the gridstatus → timeseries_data transform."""
 
+import httpx
 import polars as pl
+import pytest
 
-from src.process import transform
+from src import process as process_mod
+from src.config import Config, LogLevel
+from src.process import process, transform
 
 
 def test_transform_picks_ts_and_spp_from_gridstatus_shape() -> None:
@@ -48,3 +52,49 @@ def test_transform_empty_input_returns_empty_df() -> None:
     # Assert
     assert actual.is_empty()
     assert actual.columns == ["ts", "value"]
+
+
+def _fake_config() -> Config:
+    """Minimal Config for exercising `process()` — no DB touched."""
+    return Config(
+        log_level=LogLevel.INFO,
+        iso="ercot",
+        settlement_point="HB_NORTH",
+        gridstatus_dataset="ercot_spp_day_ahead_hourly",
+        backfill_start_date="2026-01-01",
+        metrics_port=9091,
+        mlflow_tracking_uri="http://localhost:5000",
+        mlflow_model_name="test-model",
+        schedule_time="02:00",
+        forecast_measurement="dam_lmp_price",
+        forecast_unit="usd_per_mwh",
+        forecast_horizon_hours=24,
+        load_forecast_dataset="ercot_load_forecast_by_forecast_zone",
+        load_forecast_zone="north",
+    )
+
+
+def test_process_swallows_403_from_spp_extract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """403 from gridstatus during SPP extract must not crash the scheduler.
+
+    Mirrors the existing load-forecast graceful-skip pattern. The
+    load-forecast half still runs; here we replace it with a no-op so
+    the test doesn't need a DB.
+    """
+
+    # Arrange
+    def _raise_403(_config: Config) -> pl.DataFrame:
+        request = httpx.Request("GET", "https://api.gridstatus.io/v1/x")
+        response = httpx.Response(403, request=request)
+        raise httpx.HTTPStatusError("quota", request=request, response=response)
+
+    monkeypatch.setattr(process_mod, "extract", _raise_403)
+    monkeypatch.setattr(process_mod, "_process_load_forecast", lambda _c: None)
+
+    # Act — must not raise
+    process(_fake_config())
+
+    # Assert — reaching here IS the assertion (no exception propagated).
+    assert True

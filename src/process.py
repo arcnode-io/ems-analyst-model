@@ -459,22 +459,35 @@ def _load_forecast_rows(df: pl.DataFrame) -> None:
 
 
 def process(config: Config) -> None:
-    """Execute ETL: SPP target + load forecast feature → Postgres."""
+    """Execute ETL: SPP target + load forecast feature → Postgres.
+
+    SPP extract is wrapped in an HTTPStatusError guard mirroring the
+    existing pattern in `_process_load_forecast`. Reason: on 403
+    (quota exhausted) or 404 (bad dataset slug) we log-and-skip so the
+    daily scheduler doesn't crash and the load-forecast half still runs.
+    """
     log.info(
         "🌐 ETL start — dataset=%s location=%s",
         config.gridstatus_dataset,
         config.settlement_point,
     )
-    raw = extract(config)
-    clean = transform(raw)
-    if not clean.is_empty():
-        log.info(
-            "🧹 transformed: %d rows, ts range %s → %s",
-            clean.height,
-            clean["ts"].min(),
-            clean["ts"].max(),
+    try:
+        raw = extract(config)
+        clean = transform(raw)
+        if not clean.is_empty():
+            log.info(
+                "🧹 transformed: %d rows, ts range %s → %s",
+                clean.height,
+                clean["ts"].min(),
+                clean["ts"].max(),
+            )
+        load(clean, config)
+    except httpx.HTTPStatusError as e:
+        log.warning(
+            "SPP extract failed (%s) — skipping SPP ETL this cycle, "
+            "continuing to load-forecast",
+            e,
         )
-    load(clean, config)
     log.info(
         "🌐 load-forecast ETL — dataset=%s zone=%s",
         config.load_forecast_dataset,

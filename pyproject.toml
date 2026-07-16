@@ -71,6 +71,9 @@ omit = ["*/test_*.py", "tests/*"]
 
 [tool.deptry.per_rule_ignores]
 DEP002 = ["boto3", "gitpython", "mako", "numpy", "pyarrow", "urllib3"]
+# Reason: test files colocated in src/ pull dev-only deps. Mirrors the
+# ems-analyst agent repo's convention (DEP004 for pytest/pook/psycopg2).
+DEP004 = ["pytest"]
 
 [tool.uv]
 constraint-dependencies = [
