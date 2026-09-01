@@ -214,11 +214,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/14/c8/13da5c6a37b46a690199e0895c33a758ba4f2ec3cd81d1d72ebb373509a8/black-26.5.0-py3-none-any.whl", hash = "sha256:241f25bf59f5ca17f5121031e310e089b84cd22bb4eca47360099ea825544f17", size = 212907, upload-time = "2026-05-16T17:57:10.792Z" },
 ]
 
-[package.optional-dependencies]
-d = [
-    { name = "aiohttp" },
-]
-
 [[package]]
 name = "blinker"
 version = "1.9.0"
@@ -740,7 +735,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "bandit" },
-    { name = "black", extra = ["d"] },
+    { name = "black" },
     { name = "deptry" },
     { name = "pandas-stubs" },
     { name = "pip" },
@@ -788,7 +783,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "bandit", specifier = ">=1.8.0" },
-    { name = "black", extras = ["d"], specifier = ">=26.3.1" },
+    { name = "black", specifier = ">=26.3.1" },
     { name = "deptry", specifier = ">=0.23.0" },
     { name = "pandas-stubs", specifier = ">=3.0" },
     { name = "pip", specifier = ">=26.1" },
