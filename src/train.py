@@ -62,18 +62,24 @@ def load_timeseries_data(_config: Config) -> pl.DataFrame:
     load_forecasts_raw ETL has caught up); affected rows get
     `load_forecast_mw=NULL` and are dropped before training.
     """
-    # Scope the load-forecast slice to the last 60 days so stale partial
-    # backfills (from earlier ETL runs that only covered tiny windows
-    # before the lookback narrowed) don't pollute the join. Outside that
-    # window timeseries_data still trains on time + lag features alone
-    # via the LEFT JOIN + null-drop in _featurize.
+    # Scope the load-forecast slice to the last 60 days of the *target
+    # series itself* — not wall-clock NOW() — so stale partial backfills
+    # don't pollute the join. Anchoring to NOW() instead of MAX(ts) was a
+    # real bug: if the SPP ETL stalls (e.g. a gridstatus outage) for
+    # longer than 60 days, timeseries_data goes stale relative to NOW()
+    # and this CTE returns zero rows — load_forecast_mw comes back NULL
+    # for every row, and _featurize's null-drop empties the tree models'
+    # training set entirely. Anchoring to the series' own MAX(ts) keeps
+    # the join working on however-old the data is. Outside the window
+    # timeseries_data still trains on time + lag features alone via the
+    # LEFT JOIN + null-drop in _featurize.
     sql = """
         WITH leakage_safe AS (
             SELECT DISTINCT ON (interval_start_utc)
                    interval_start_utc AS ts,
                    load_mw
             FROM load_forecasts_raw
-            WHERE interval_start_utc >= NOW() - INTERVAL '60 days'
+            WHERE interval_start_utc >= (SELECT MAX(ts) FROM timeseries_data) - INTERVAL '60 days'
               AND publish_time_utc <= interval_start_utc - INTERVAL '24 hours'
             ORDER BY interval_start_utc, publish_time_utc DESC
         )

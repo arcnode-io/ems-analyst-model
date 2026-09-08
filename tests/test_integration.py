@@ -17,6 +17,7 @@ from prometheus_client.parser import text_string_to_metric_families
 from src.app import app
 from src.config import load_config
 from src.models import PredictiveModels
+from src.train import load_timeseries_data
 from tests.fixtures.containers import start_mlflow, start_postgres
 
 
@@ -39,16 +40,25 @@ def create_timeseries_table(timeseries_url: str) -> psycopg2.extensions.connecti
     return conn
 
 
-def seed_trending_data(conn: psycopg2.extensions.connection, days: int = 60) -> None:
+def seed_trending_data(
+    conn: psycopg2.extensions.connection,
+    days: int = 60,
+    anchor: datetime | None = None,
+) -> None:
     """Seed hourly SPP + matching leakage-safe load-forecast rows.
 
     For each SPP hour H, insert a load-forecast row with publish_time_utc
     = H - 25h (satisfies the `<= H - 24h` leakage guard in
     `load_timeseries_data`). Load value mirrors the SPP value with an
     offset so the model has a correlated signal to learn.
+
+    Args:
+        anchor: timestamp of the last seeded hour. Defaults to now —
+            pass an older instant to simulate a stale target series
+            (e.g. a gridstatus outage that's stopped the daily ETL).
     """
     cursor = conn.cursor()
-    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    now = (anchor or datetime.now(UTC)).replace(minute=0, second=0, microsecond=0)
     total_hours = days * 24
     for i in range(total_hours):
         ts = now - timedelta(hours=total_hours - i)
@@ -144,6 +154,29 @@ def parse_prometheus_metrics(metrics_text: str) -> dict[str, float]:
         for sample in family.samples:
             metrics[sample.name] = sample.value
     return metrics
+
+
+def test_load_timeseries_data_joins_forecast_when_series_is_stale() -> None:
+    """Load-forecast join must anchor to the series' own recency, not
+    wall-clock NOW() — else a stale target series (e.g. a gridstatus
+    outage that's stopped the daily ETL) hits an empty `leakage_safe`
+    CTE, load_forecast_mw comes back NULL for every row, and
+    `_featurize`'s null-drop zeroes the tree models' training set
+    downstream — the pipeline crashes on the next XGBoost/LightGBM fit.
+    """
+    with start_postgres(image="timescale/timescaledb:latest-pg15") as pg:
+        os.environ["TIMESERIES_URL"] = pg.url
+        conn = create_timeseries_table(pg.url)
+        stale_anchor = datetime.now(UTC) - timedelta(days=120)
+        try:
+            seed_trending_data(conn, days=60, anchor=stale_anchor)
+        finally:
+            conn.close()
+
+        actual = load_timeseries_data(load_config())
+
+        assert actual.height > 0
+        assert actual["load_forecast_mw"].null_count() < actual.height
 
 
 class TestIntegration:
