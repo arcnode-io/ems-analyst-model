@@ -5,10 +5,16 @@ from typing import cast
 
 import pandas as pd
 import polars as pl
+import pytest
 from prophet import Prophet
 from xgboost.sklearn import XGBRegressor
 
-from src.score import _future_hours, _score_prophet, _score_tree
+from src.score import (
+    _future_hours,
+    _score_prophet,
+    _score_tree,
+    realign_curve_by_hour,
+)
 
 
 def test_future_hours_returns_horizon_count() -> None:
@@ -62,6 +68,49 @@ def test_score_prophet_returns_one_value_per_timestamp() -> None:
     # Assert
     assert len(actual) == 3
     assert all(isinstance(v, float) for v in actual)
+
+
+def test_realign_curve_by_hour_maps_values_by_hour_of_day() -> None:
+    """A canonical curve is re-timed onto a new window, matched on UTC hour."""
+    # Arrange — 24-row curve, value == hour so the mapping is easy to check
+    curve = pl.DataFrame(
+        {"hour_utc": list(range(24)), "usd_per_mwh": [float(h) for h in range(24)]}
+    )
+    target_hours = [
+        datetime(2026, 9, 8, 5, tzinfo=UTC) + timedelta(hours=i) for i in range(24)
+    ]
+    # Act
+    actual = realign_curve_by_hour(curve, target_hours)
+    # Assert — forecast_for is the new window; each value came from the
+    # curve row with the same hour-of-day (target 05:00 → curve hour 5 → 5.0)
+    assert actual["forecast_for"].to_list() == target_hours
+    assert actual["value"].to_list() == [float(t.hour) for t in target_hours]
+
+
+def test_realign_curve_by_hour_rejects_incomplete_curve() -> None:
+    """A curve missing a target hour-of-day is a hard error."""
+    # Arrange — only 3 hours, target spans a full 24
+    curve = pl.DataFrame({"hour_utc": [9, 10, 11], "usd_per_mwh": [1.0, 2.0, 3.0]})
+    target_hours = [
+        datetime(2026, 9, 8, 0, tzinfo=UTC) + timedelta(hours=i) for i in range(24)
+    ]
+    # Act / Assert
+    with pytest.raises(ValueError, match="missing hours-of-day"):
+        realign_curve_by_hour(curve, target_hours)
+
+
+def test_realign_curve_by_hour_rejects_repeated_hour() -> None:
+    """A curve with the same hour twice is a hard error."""
+    # Arrange — hour 9 appears twice
+    curve = pl.DataFrame(
+        {"hour_utc": [*range(24), 9], "usd_per_mwh": [float(i) for i in range(25)]}
+    )
+    target_hours = [
+        datetime(2026, 9, 8, 0, tzinfo=UTC) + timedelta(hours=i) for i in range(24)
+    ]
+    # Act / Assert
+    with pytest.raises(ValueError, match="repeats an hour"):
+        realign_curve_by_hour(curve, target_hours)
 
 
 def _build_history(start: datetime, hours: int = 200) -> pl.DataFrame:

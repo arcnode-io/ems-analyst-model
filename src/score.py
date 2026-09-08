@@ -77,6 +77,46 @@ def _future_hours(horizon_hours: int) -> list[datetime]:
     return [start + timedelta(hours=i) for i in range(horizon_hours)]
 
 
+def realign_curve_by_hour(
+    curve: pl.DataFrame, target_hours: list[datetime]
+) -> pl.DataFrame:
+    """Lay a canonical 24h curve onto `target_hours` by UTC hour-of-day.
+
+    Demo reseed helper. gridstatus credits are exhausted until the monthly
+    reset, so there's no fresh SPP to score — the last real champion curve
+    (shipped as `demo_data/champion_dam_lmp_curve.csv`) gets laid onto the
+    live horizon instead, same re-timing trick the demo historian path
+    uses for `/measurements`.
+
+    Args:
+        curve: DataFrame (hour_utc, usd_per_mwh) — one row per hour 0-23.
+        target_hours: the live horizon, from `_future_hours`.
+
+    Returns:
+        DataFrame (forecast_for, value): forecast_for = target_hours, each
+        value taken from the curve row sharing that hour-of-day.
+
+    Raises:
+        ValueError: if `curve` repeats an hour, or doesn't cover every
+            target hour-of-day.
+    """
+    pairs = list(curve.select("hour_utc", "usd_per_mwh").iter_rows())
+    by_hour: dict[int, float] = {int(hour): value for hour, value in pairs}
+    if len(by_hour) != len(pairs):
+        raise ValueError(
+            f"curve repeats an hour: {len(pairs)} rows, {len(by_hour)} distinct"
+        )
+    missing = sorted({t.hour for t in target_hours} - by_hour.keys())
+    if missing:
+        raise ValueError(f"curve missing hours-of-day: {missing}")
+    return pl.DataFrame(
+        {
+            "forecast_for": target_hours,
+            "value": [by_hour[t.hour] for t in target_hours],
+        }
+    )
+
+
 def _score_prophet(model: Prophet, future_ts: list[datetime]) -> list[float]:
     """Prophet predicts a tz-naive DF; strip tz before predict."""
     df = pd.DataFrame({"ds": [ts.replace(tzinfo=None) for ts in future_ts]})
