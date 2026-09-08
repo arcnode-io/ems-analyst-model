@@ -134,6 +134,7 @@ def _fetch_dataset(
     filter_value: str | None,
     start: datetime,
     end: datetime,
+    publish_time_start: datetime | None = None,
 ) -> pl.DataFrame:
     """Page through gridstatus REST returning a stitched polars DataFrame.
 
@@ -141,6 +142,12 @@ def _fetch_dataset(
     limit. On 429, sleeps the gridstatus-suggested wait then retries.
     `filter_column` + `filter_value` are optional — drop them entirely
     for system-wide datasets (load forecast, etc).
+
+    `publish_time_start` is a separate, independent filter (verified
+    against gridstatus's REST reference — it filters `publish_time_column`,
+    `start_time`/`end_time` still filter `time_index_column`) — pass it to
+    get only rows published after a watermark instead of re-walking a
+    full time-index window. See `_sync_load_forecast_incremental`.
     """
     headers = {"x-api-key": os.environ["GRIDSTATUS_API_KEY"]}
     url = f"{_GRIDSTATUS_BASE}/datasets/{dataset}/query"
@@ -164,6 +171,10 @@ def _fetch_dataset(
             if filter_column and filter_value:
                 params["filter_column"] = filter_column
                 params["filter_value"] = filter_value
+            if publish_time_start:
+                params["publish_time_start"] = publish_time_start.strftime(
+                    "%Y-%m-%dT%H:%M:%S.%f"
+                )
             if cursor:
                 params["cursor"] = cursor
             log.info(
@@ -347,14 +358,51 @@ _LOAD_FORECAST_LOOKAHEAD_DAYS: Final[int] = 7
 _LOAD_FORECAST_CHUNK_DAYS: Final[int] = 3
 
 
+def _clean_load_forecast_chunk(raw: pl.DataFrame, zone_col: str) -> pl.DataFrame:
+    """Project a raw gridstatus load-forecast page to (ts, publish, load_mw).
+
+    Shared by the full chunked walk and the watermark sync — same source
+    columns, same target shape either way.
+
+    Raises:
+        ValueError: if `zone_col` isn't a column in `raw` (bad config).
+    """
+    if raw.is_empty():
+        return raw
+    if zone_col not in raw.columns:
+        raise ValueError(
+            f"load_forecast_zone {zone_col!r} not in dataset columns {raw.columns!r}"
+        )
+    return (
+        raw.select(
+            pl.col("interval_start_utc")
+            .str.to_datetime(time_zone="UTC")
+            .alias("interval_start_utc"),
+            pl.col("publish_time_utc")
+            .str.to_datetime(time_zone="UTC")
+            .alias("publish_time_utc"),
+            pl.col(zone_col).cast(pl.Float64).alias("load_mw"),
+        )
+        .drop_nulls()
+        .unique(subset=["interval_start_utc", "publish_time_utc"])
+    )
+
+
 def _process_load_forecast(config: Config) -> None:
-    """Pull ERCOT load forecast for the configured zone -> load_forecasts_raw.
+    """Full chunked walk of ERCOT load forecast -> load_forecasts_raw.
 
     Scope: last 60 days + next 7 days. Pulled in 3-day chunks because
     gridstatus' load-forecast dataset hits the 50k-row page cap at
     ~3.5 days per query (no working cursor for this dataset).
     UPSERT on (interval_start_utc, publish_time_utc) is idempotent
     across chunk overlaps + re-runs.
+
+    Used two ways (see `_sync_load_forecast`): as the one-time bootstrap
+    when `load_forecasts_raw` is empty, and as the monthly full
+    reconciliation — gridstatus's own guidance for forecast datasets that
+    republish for the same interval is to pair a cheap daily watermark
+    sync with an occasional full walk that catches late corrections the
+    watermark can miss.
 
     LEAKAGE NOTE: training applies the strict `<= ts - 24h` filter at
     SELECT time in `train.load_timeseries_data`. Mid-day same-day
@@ -365,7 +413,7 @@ def _process_load_forecast(config: Config) -> None:
     window_start = now - timedelta(days=_LOAD_FORECAST_LOOKBACK_DAYS)
     window_end = now + timedelta(days=_LOAD_FORECAST_LOOKAHEAD_DAYS)
     log.info(
-        "🔄 load-forecast pull window %s -> %s (3-day chunks)",
+        "🔄 load-forecast full walk %s -> %s (3-day chunks)",
         window_start.date(),
         window_end.date(),
     )
@@ -395,32 +443,83 @@ def _process_load_forecast(config: Config) -> None:
             )
             break
         chunk_start = chunk_end
-        if raw.is_empty():
-            continue
-        zone_col = config.load_forecast_zone
-        if zone_col not in raw.columns:
-            raise ValueError(
-                f"load_forecast_zone {zone_col!r} not in dataset "
-                f"columns {raw.columns!r}"
-            )
-        clean = (
-            raw.select(
-                pl.col("interval_start_utc")
-                .str.to_datetime(time_zone="UTC")
-                .alias("interval_start_utc"),
-                pl.col("publish_time_utc")
-                .str.to_datetime(time_zone="UTC")
-                .alias("publish_time_utc"),
-                pl.col(zone_col).cast(pl.Float64).alias("load_mw"),
-            )
-            .drop_nulls()
-            .unique(subset=["interval_start_utc", "publish_time_utc"])
-        )
+        clean = _clean_load_forecast_chunk(raw, config.load_forecast_zone)
         if clean.is_empty():
             continue
         _load_forecast_rows(clean)
         total += clean.height
     log.info("💾 loaded %d total load-forecast rows", total)
+
+
+def _sync_load_forecast_incremental(config: Config, watermark: datetime) -> None:
+    """One cheap call: only load-forecast rows published after `watermark`.
+
+    gridstatus's documented recipe for this exact dataset (Backfill and
+    Incrementally Sync a Dataset) — `publish_time_start` filters
+    server-side, so this replaces the ~23-chunk full walk with a single
+    request on every day that isn't a reconciliation day.
+    """
+    _ensure_load_forecasts_table()
+    now = datetime.now(UTC)
+    window_start = now - timedelta(days=_LOAD_FORECAST_LOOKBACK_DAYS)
+    window_end = now + timedelta(days=_LOAD_FORECAST_LOOKAHEAD_DAYS)
+    publish_time_start = watermark + timedelta(microseconds=1)
+    log.info(
+        "🔄 load-forecast watermark sync — publishes after %s",
+        publish_time_start.isoformat(),
+    )
+    try:
+        raw = _fetch_dataset(
+            dataset=config.load_forecast_dataset,
+            filter_column=None,
+            filter_value=None,
+            start=window_start,
+            end=window_end,
+            publish_time_start=publish_time_start,
+        )
+    except httpx.HTTPStatusError as e:
+        log.warning("load-forecast watermark sync failed: %s — skipping this cycle", e)
+        return
+    clean = _clean_load_forecast_chunk(raw, config.load_forecast_zone)
+    if clean.is_empty():
+        log.info("✅ load-forecast up to date — no new publishes")
+        return
+    _load_forecast_rows(clean)
+    log.info(
+        "💾 loaded %d new/revised load-forecast rows (watermark sync)", clean.height
+    )
+
+
+def _should_run_full_reconciliation(watermark: datetime | None, now: datetime) -> bool:
+    """True on first-ever sync (no watermark) or the 1st of the month.
+
+    gridstatus recommends pairing a watermark sync with periodic full
+    reconciliation to catch late corrections the watermark alone can
+    miss. Anchored to day-of-month rather than a day-count interval so
+    it doesn't drift — the `schedule` lib has no native monthly cadence.
+    """
+    return watermark is None or now.day == 1
+
+
+def _sync_load_forecast(config: Config, now: datetime | None = None) -> None:
+    """Daily driver: watermark sync, with a monthly full reconciliation.
+
+    Args:
+        config: pipeline config.
+        now: injectable for tests; defaults to wall-clock UTC now.
+    """
+    watermark = _latest_load_forecast_publish()
+    now = now or datetime.now(UTC)
+    if _should_run_full_reconciliation(watermark, now):
+        reason = "no prior sync" if watermark is None else "monthly reconciliation"
+        log.info("🗓 full load-forecast walk (%s)", reason)
+        _process_load_forecast(config)
+        return
+    # Reason: _should_run_full_reconciliation already returned True above
+    # when watermark is None — reaching here means it's set. Narrows the
+    # type for the incremental path, which needs a real watermark.
+    assert watermark is not None
+    _sync_load_forecast_incremental(config, watermark)
 
 
 def _load_forecast_rows(df: pl.DataFrame) -> None:
@@ -493,5 +592,5 @@ def process(config: Config) -> None:
         config.load_forecast_dataset,
         config.load_forecast_zone,
     )
-    _process_load_forecast(config)
+    _sync_load_forecast(config)
     log.info("✅ ETL done")

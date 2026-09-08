@@ -1,12 +1,14 @@
 """Unit tests for the gridstatus → timeseries_data transform."""
 
+from datetime import UTC, datetime
+
 import httpx
 import polars as pl
 import pytest
 
 from src import process as process_mod
 from src.config import Config, LogLevel
-from src.process import process, transform
+from src.process import _should_run_full_reconciliation, process, transform
 
 
 def test_transform_picks_ts_and_spp_from_gridstatus_shape() -> None:
@@ -91,10 +93,36 @@ def test_process_swallows_403_from_spp_extract(
         raise httpx.HTTPStatusError("quota", request=request, response=response)
 
     monkeypatch.setattr(process_mod, "extract", _raise_403)
-    monkeypatch.setattr(process_mod, "_process_load_forecast", lambda _c: None)
+    monkeypatch.setattr(process_mod, "_sync_load_forecast", lambda _c: None)
 
     # Act — must not raise
     process(_fake_config())
 
     # Assert — reaching here IS the assertion (no exception propagated).
     assert True
+
+
+def test_should_run_full_reconciliation_when_no_prior_watermark() -> None:
+    """No watermark yet (first-ever sync) -> full walk, not incremental."""
+    actual = _should_run_full_reconciliation(
+        watermark=None, now=datetime(2026, 9, 15, tzinfo=UTC)
+    )
+    assert actual is True
+
+
+def test_should_run_full_reconciliation_on_first_of_month() -> None:
+    """1st of the month -> full walk even with a watermark (reconciliation)."""
+    actual = _should_run_full_reconciliation(
+        watermark=datetime(2026, 8, 1, tzinfo=UTC),
+        now=datetime(2026, 9, 1, tzinfo=UTC),
+    )
+    assert actual is True
+
+
+def test_should_not_run_full_reconciliation_mid_month_with_watermark() -> None:
+    """Mid-month with a watermark -> incremental sync, not a full walk."""
+    actual = _should_run_full_reconciliation(
+        watermark=datetime(2026, 9, 14, tzinfo=UTC),
+        now=datetime(2026, 9, 15, tzinfo=UTC),
+    )
+    assert actual is False

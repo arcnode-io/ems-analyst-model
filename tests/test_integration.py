@@ -17,6 +17,7 @@ from prometheus_client.parser import text_string_to_metric_families
 from src.app import app
 from src.config import load_config
 from src.models import PredictiveModels
+from src.process import _sync_load_forecast
 from src.train import load_timeseries_data
 from tests.fixtures.containers import start_mlflow, start_postgres
 
@@ -177,6 +178,49 @@ def test_load_timeseries_data_joins_forecast_when_series_is_stale() -> None:
 
         assert actual.height > 0
         assert actual["load_forecast_mw"].null_count() < actual.height
+
+
+def test_sync_load_forecast_uses_watermark_when_prior_sync_exists() -> None:
+    """A prior watermark -> one publish_time_start call, not the ~23-call
+    3-day-chunk full walk across the whole 60d/7d window.
+
+    `now` is pinned mid-month so the day-of-month reconciliation branch
+    can't fire regardless of when this test actually runs.
+    """
+    with start_postgres(image="timescale/timescaledb:latest-pg15") as pg:
+        os.environ["TIMESERIES_URL"] = pg.url
+        conn = create_timeseries_table(pg.url)
+        watermark = datetime.now(UTC) - timedelta(hours=2)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO load_forecasts_raw "
+            "(interval_start_utc, publish_time_utc, load_mw) VALUES (%s, %s, %s)",
+            (datetime.now(UTC), watermark, 30000.0),
+        )
+        conn.commit()
+        conn.close()
+
+        test_config = load_config()
+        os.environ.setdefault("GRIDSTATUS_API_KEY", "test-key-not-real")
+        empty_payload = {"data": [], "meta": {"hasNextPage": False, "cursor": None}}
+        # `.reply()` returns the response builder, not the Mock — keep a
+        # separate handle on the Mock itself so `.calls` is readable below.
+        watermark_mock = pook.get(
+            f"https://api.gridstatus.io/v1/datasets/"
+            f"{test_config.load_forecast_dataset}/query"
+        )
+        watermark_mock.param_exists("publish_time_start")
+        watermark_mock.times(1)
+        watermark_mock.reply(200).json(empty_payload)
+        pook.enable_network("localhost", "127.0.0.1")
+        pook.on()
+        try:
+            _sync_load_forecast(test_config, now=datetime(2026, 9, 15, tzinfo=UTC))
+        finally:
+            pook.off()
+            pook.reset()
+
+        assert watermark_mock.calls == 1
 
 
 class TestIntegration:
