@@ -284,11 +284,19 @@ None.
 | 🔧 mechanical-engineer | edp-interface-plates |
 | 🏗 platform-engineer | platform-api, platform-ems-iso |
 | 🖥️ frontend-engineer | ems-hmi |
-| ⚙️ backend-engineer | ems-device-api |
+| ⚙️ backend-engineer | ems-device-api, ems-der-control-api |
 | 🏭 ics-engineer | ems-industrial-gateway, ems-industrial-fixtures |
 | 🤖 ai-engineer | ems-analyst-agent, ems-analyst-mcp, ems-analyst-server |
 | 📊 ml-engineer | ems-analyst-model |
 | 🛰️ embedded-engineer | dlr-operating-envelope, dlr-pst-sim |
 | 📟 electronics-engineer | dlr-pcb |
+| 🧔 devops-engineer | ~/engineering-with-ai/tooling-playbooks |
+
+
+## Commits & CI
+
+- **Use emoji conventional commits:** `<emoji> <type>: <description>`. Pick whatever emoji fits the change — the `type` must stay a standard conventional-commit type (`feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`, etc.) so changelog generation and version bumping can parse it later.
+- **After every push, check CI with `glab`** (`glab ci status` / `glab ci view`) before calling the task done.
+- **The repo is never red.** Done means pushed AND CI is green — not just pushed. Fix failures before moving on.
 
 
