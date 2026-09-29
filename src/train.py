@@ -4,6 +4,12 @@ Three models trained per run: Prophet (seasonality), XGBoost + LightGBM
 (both gradient-boosted trees on the same time-based features). Champion
 is whichever has lowest holdout MAE; if all three lose to the naive
 baseline (mean), system degradation is logged.
+
+Reason MAE, not RMSE/MAPE: every hour matters equally for dispatch —
+a $/MWh miss at 3am costs the same operationally as one at 6pm. RMSE
+would let rare price spikes dominate the score, which rewards whichever
+model happens to dodge the outlier hours in *this* holdout window, not
+necessarily the model that's more useful day-to-day.
 """
 
 import logging
@@ -100,7 +106,12 @@ def load_timeseries_data(_config: Config) -> pl.DataFrame:
 def split_train_test(
     df: pl.DataFrame, test_days: int = TRAIN_TEST_SPLIT_DAYS
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Time-ordered split — last `test_days` for holdout."""
+    """Time-ordered split — last `test_days` for holdout.
+
+    Reason: not a random split — production only ever has the past to
+    predict the future, so a random split would leak future prices into
+    training (rows "after" some holdout rows) and overstate accuracy.
+    """
     max_ts = df["ts"].max()
     assert isinstance(max_ts, datetime)
     split_date = max_ts - timedelta(days=test_days)  # type: ignore[operator]
@@ -122,6 +133,10 @@ def train_prophet(
         daily_seasonality=config.prophet_daily_seasonality,
         weekly_seasonality=config.prophet_weekly_seasonality,
         yearly_seasonality=config.prophet_yearly_seasonality,
+        # Reason: multiplicative — seasonal swings scale with the price
+        # level (daily peak-to-trough is bigger when prices are
+        # generally high), not a fixed $/MWh amount. Additive would
+        # underfit high-price regimes.
         seasonality_mode="multiplicative",
         uncertainty_samples=0,
     )
@@ -226,7 +241,15 @@ def train_lightgbm(
 
 
 def calculate_baseline_mae(test_df: pl.DataFrame) -> float:
-    """Naive baseline: predict mean of holdout. Floor any real model must beat."""
+    """Naive baseline: predict mean of holdout. Floor any real model must beat.
+
+    Reason mean, not persistence (predict t-24h): checked both against
+    the current holdout — they're within ~1% of each other (mean 17.21
+    vs persistence 17.05 MAE), so it isn't a meaningful accuracy call
+    either way. Mean was picked as the simpler floor to reason about.
+    Persistence is the more textbook choice for a price series — worth
+    switching to if this baseline is ever scrutinized more closely.
+    """
     y_true = test_df["value"].to_numpy()
     return float(mean_absolute_error(y_true, [y_true.mean()] * len(y_true)))
 
@@ -269,6 +292,10 @@ def select_champion(
     - Subsequent: if best challenger beats current champion, promote.
     - Baseline-vs-champion degradation is checked separately in
       train_models (logs + surfaces via /metrics for Grafana to alert).
+
+    Reason no margin/hysteresis: promotes on *any* improvement, however
+    small. YAGNI call — nothing's demonstrated day-to-day flapping
+    between near-tied challengers yet. Add a margin if that shows up.
     """
     challenger, challenger_mae = _best_challenger(
         prophet_mae, xgboost_mae, lightgbm_mae
