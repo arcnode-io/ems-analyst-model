@@ -8,92 +8,85 @@
 ![](https://img.shields.io/badge/mlflow-gray?logo=mlflow)
 ![](https://img.shields.io/badge/validator-pandera-78ac1b)
 
-> Solar supply forecasting model training and MLflow deployment - comparing Prophet vs LSTM vs XGBoost on hourly data since 2016
+> ERCOT day-ahead settlement point price forecasting for HB_NORTH — comparing Prophet, XGBoost, and LightGBM on hourly data backfilled from 2022.
 
 ## Prerequisites
-- Ercot API  Account
+- Gridstatus.io API account (`GRIDSTATUS_API_KEY`)
+- PostgreSQL time-series database (`TIMESERIES_URL`) and MLflow tracking server
+
+The daily pipeline pulls `ercot_spp_day_ahead_hourly` prices and North-zone load forecasts, trains the models, registers the lowest-holdout-MAE model in MLflow, and writes the next 24 hours of `dam_lmp_price` forecasts in `usd_per_mwh` to PostgreSQL. The analyst server reads the `forecasts` table for the agent and HMI; MLflow stays off the runtime serving path.
 
 
 ## Activity Diagram for Training
 
-The following logic ensures:
-
-- Best performing model is always selected
-
-- System never silently degrades below baseline
-
-- Human intervention is triggered when needed
+Each scheduled run selects the model with the lowest holdout MAE and records the model and baseline metrics in MLflow and Prometheus. The baseline is a comparison metric; it is not deployed as a fallback.
 
 ```plantuml
-if (challenger > champion) then (yes)
- :deploy challenger;
- stop
-else (no)
- if (baseline > champion) then (yes)
-   :send grafana alert;
-   :deploy baseline;
-   stop
- else (no)
-   :keep champion;
-   stop
+:train Prophet, XGBoost, and LightGBM;
+:select lowest holdout MAE;
+:register champion in MLflow;
+:score next 24 hours;
+:write forecasts to PostgreSQL;
+stop
 ```
 
 ### Deployment Diagram
 
 ```plantuml
-cloud ercot_api
+cloud gridstatus_api
 rectangle train
 database timeseries
 rectangle model_store
-train -l-> ercot_api: HTTP\n updates with latest
+train -l-> gridstatus_api: HTTP\n prices + load forecasts
 train -u-> timeseries: SQL\n gets historical
 train -d-> model_store: MLflow API\ndeploy model
 ```
 
 ## Sequence Diagram
 
-The CI versioning job should version the new model in MLflow for the server workspace member to consume
+The daily pipeline registers the champion in MLflow and publishes forecast rows for the analyst server to consume.
 
 ```plantuml
-collections ercot_api
+collections gridstatus_api
 participant process
 database timeseries
 participant train
 participant grafana_prometheus
 actor data_scientist
-collections ci_versioning_job
 database model_store
 == Daily Automated Training ==
-process -> ercot_api: request solar data
+process -> gridstatus_api: request DAM prices + load forecasts
 process -> timeseries: load hourly data
 train -> timeseries: get training data
-train -> train: compare Prophet vs LSTM vs XGBoost
+train -> train: compare Prophet vs XGBoost vs LightGBM
 train -> train: promote best model
-train -> model_store: deploy MLflow model
+train -> model_store: register MLflow model version
+train -> timeseries: write 24-hour price forecasts
 
 == Manual Data Scientist Retraining ==
-train -> grafana_prometheus: send alert
+train -> grafana_prometheus: expose model + baseline metrics
 grafana_prometheus -> data_scientist: receives w/ Grafana Notifier
 data_scientist -> train: train new challenger
-data_scientist -> ci_versioning_job: breaking change conventional commit
-ci_versioning_job -> model_store: version new MLflow model
+train -> model_store: register MLflow model version
+train -> timeseries: write price forecasts
 ```
-
-> *🐢 will setup webhook when latency is high
 
 ## Project Structure
 
 ```
 ├── pyproject.toml           # Dependencies and build config
-├── model_selection.ipynb    # Model comparison analysis and selection
+├── model_evaluation.ipynb   # Model comparison analysis and evaluation
 ├── seed.py                  # Script for seeding historical data
 ├── src/
 │   ├── main.py              # Training pipeline entry point
-│   ├── models.py            # Model definitions and training
+│   ├── app.py               # Scheduling and pipeline orchestration
+│   ├── models.py            # Schemas, feature columns, and hyperparameters
+│   ├── train.py             # Model training and champion selection
+│   ├── score.py             # Forecast generation and PostgreSQL publishing
 │   ├── process.py           # Data processing pipeline
-│   ├── process_test.py      # Data processing tests
+│   ├── test_process.py      # Data processing tests
 │   ├── utils.py             # Utility functions
-│   └── utils_test.py        # Utility tests
+│   └── test_utils.py        # Utility tests
 ├── tests/
 │   └── test_integration.py  # End-to-end model tests
 └── readme.md                # This file
