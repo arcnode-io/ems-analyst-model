@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         choices=["once", "schedule"],
-        default="once",
+        default="schedule",
         help="Run pipeline once or start daily scheduler",
     )
     args = parser.parse_args()
