@@ -1,5 +1,6 @@
 local:
   log_level: DEBUG
+  site_id: local
   iso: ercot
   settlement_point: HB_NORTH
   gridstatus_dataset: ercot_spp_day_ahead_hourly
@@ -18,6 +19,7 @@ local:
   load_forecast_zone: north
 beta:
   log_level: INFO
+  site_id: beta
   iso: ercot
   settlement_point: HB_NORTH
   gridstatus_dataset: ercot_spp_day_ahead_hourly

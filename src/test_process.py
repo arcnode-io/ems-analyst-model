@@ -60,6 +60,7 @@ def _fake_config() -> Config:
     """Minimal Config for exercising `process()` — no DB touched."""
     return Config(
         log_level=LogLevel.INFO,
+        site_id="test",
         iso="ercot",
         settlement_point="HB_NORTH",
         gridstatus_dataset="ercot_spp_day_ahead_hourly",

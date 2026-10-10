@@ -2,9 +2,19 @@ import enum
 import logging
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 
 from pydantic import BaseModel
 import yaml
+
+# Leaf value a YAML field can hold — explicit instead of Any/object per
+# this repo's typing rules. cfg.yml's stage blocks are flat (no nested
+# config sections), so a stage is dict[str, YamlScalar], no recursion
+# needed. Reason not recursive: beartype can't runtime-check a
+# forward-referencing recursive `type` alias (confirmed via
+# BeartypeCallHintForwardRefException) — if a nested config block is
+# ever added, this needs a real rethink, not a wider alias.
+type YamlScalar = str | int | bool | float | None
 
 
 class LogLevel(enum.StrEnum):
@@ -18,6 +28,7 @@ class LogLevel(enum.StrEnum):
 
 class Config(BaseModel):  # noqa: D101
     log_level: LogLevel
+    site_id: str
     iso: str
     settlement_point: str
     gridstatus_dataset: str
@@ -44,18 +55,36 @@ class _ConfigMap(BaseModel):
     beta: Config
 
 
-def load_config() -> Config:
-    """Load configuration from cfg.yml file based on environment.
+def _deep_merge(
+    base: dict[str, YamlScalar], overlay: dict[str, YamlScalar]
+) -> dict[str, YamlScalar]:
+    """Overlay wins per key. Flat merge — cfg.yml's stage blocks have no nested sections.
 
-    Reads the configuration file and returns the appropriate config
-    based on the ENV environment variable (defaults to 'local').
+    "Deep" to match ems_analyst_agent's config loader by name — same
+    mechanism, same merge rule — but genuinely flat here since this
+    repo's Config has no nested block (unlike the agent's `market`).
+    """
+    return {**base, **overlay}
+
+
+def load_config() -> Config:
+    """Resolve cfg.yml[ENV] -> Config. ENV picks the stage; CFG_CUSTOMER_PATH merges over it.
+
+    Reason: platform needs to set mlflow_tracking_uri/site_id per deploy
+    (cloud/on-prem each point at their own MLflow container, and each
+    customer site gets its own site_id) without baking a new image.
+    CFG_CUSTOMER_PATH is a *file pointer* env var, not a config value
+    itself — the actual values still live in YAML, matching this repo's
+    "config in cfg.yml, not env files" rule. Same mechanism as
+    ems_analyst_agent's loader, for symmetry across services.
 
     Returns:
-        Config object for the current environment
+        Config object for the current environment, with any
+        CFG_CUSTOMER_PATH overrides applied.
 
     Raises:
         FileNotFoundError: If cfg.yml file is not found
-        yaml.YAMLError: If cfg.yml contains invalid YAML
+        yaml.YAMLError: If cfg.yml or the customer override contains invalid YAML
 
     Example:
         >>> config = load_config()  # Uses ENV=local by default
@@ -64,13 +93,22 @@ def load_config() -> Config:
 
     """
     with open("cfg.yml") as file:
-        config_map = _ConfigMap(**yaml.safe_load(file))
-        environment = os.environ.get("ENV", "local")
-        match environment:
-            case "beta":
-                return config_map.beta
-            case _:
-                return config_map.local
+        raw: dict[str, dict[str, YamlScalar]] = yaml.safe_load(file)
+    environment = os.environ.get("ENV", "local")
+    customer_path_env = os.environ.get("CFG_CUSTOMER_PATH")
+    if customer_path_env:
+        customer_path = Path(customer_path_env)
+        if customer_path.exists():
+            with open(customer_path) as file:
+                customer: dict[str, YamlScalar] = yaml.safe_load(file) or {}
+            stage_raw = raw.get(environment, raw["local"])
+            raw[environment] = _deep_merge(stage_raw, customer)
+    config_map = _ConfigMap.model_validate(raw)
+    match environment:
+        case "beta":
+            return config_map.beta
+        case _:
+            return config_map.local
 
 
 class _ZuluFormatter(logging.Formatter):
