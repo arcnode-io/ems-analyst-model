@@ -2,7 +2,9 @@
 
 import logging
 import time
+from typing import Final
 
+import httpx
 import mlflow
 import pandas as pd
 import schedule
@@ -16,6 +18,27 @@ from src.process import process
 from src.score import score, write_forecasts
 from src.train import TrainingResult, get_model_mae, train_models
 from src.utils import create_xgboost_input_example
+
+_MLFLOW_HEALTH_TIMEOUT_SECONDS: Final[float] = 5.0
+
+
+def check_mlflow_health(config: Config) -> None:
+    """Probe MLflow's /health endpoint; raise if unreachable.
+
+    Reason: a bad mlflow_tracking_uri should fail the container at
+    boot, not surface as a silent miss at the next scheduled run.
+
+    Args:
+        config: Configuration object with mlflow_tracking_uri set.
+
+    Raises:
+        httpx.HTTPStatusError: MLflow responded with a non-2xx status.
+        httpx.RequestError: MLflow unreachable (DNS, refused, timeout).
+    """
+    with httpx.Client(timeout=_MLFLOW_HEALTH_TIMEOUT_SECONDS) as client:
+        response = client.get(f"{config.mlflow_tracking_uri}/health")
+        response.raise_for_status()
+    logging.info(f"✅ MLflow healthy at {config.mlflow_tracking_uri}")
 
 
 def publish_to_mlflow(config: Config, result: TrainingResult) -> str:
@@ -138,6 +161,8 @@ def app(config: Config, mode: str = "once") -> None:
         config: Configuration object
         mode: "once" to run once, "schedule" for daily runs
     """
+    check_mlflow_health(config)
+
     if mode == "schedule":
         # Daemon mode → expose Prom /metrics so the always-up process can
         # be scraped directly. --mode once skips this (no need to bind a
