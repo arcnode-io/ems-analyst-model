@@ -8,7 +8,7 @@ local:
   metrics_port: 9091
   mlflow_tracking_uri: http://localhost:5000
   mlflow_model_name: dam-lmp-forecast-ercot-hb-north
-  schedule_time: "02:00"
+  schedule_time: "08:00"
   prophet_daily_seasonality: true
   prophet_weekly_seasonality: true
   prophet_yearly_seasonality: true
@@ -27,7 +27,7 @@ beta:
   metrics_port: 9091
   mlflow_tracking_uri: http://173.211.12.43:5000
   mlflow_model_name: dam-lmp-forecast-ercot-hb-north
-  schedule_time: "02:00"
+  schedule_time: "08:00"
   prophet_daily_seasonality: true
   prophet_weekly_seasonality: true
   prophet_yearly_seasonality: true
